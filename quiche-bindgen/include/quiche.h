@@ -513,6 +513,16 @@ void quiche_conn_peer_cert(const quiche_conn *conn, const uint8_t **out, size_t 
 // Returns the serialized cryptographic session for the connection.
 void quiche_conn_session(const quiche_conn *conn, const uint8_t **out, size_t *out_len);
 
+// Exports keying material from the TLS session (RFC 5705, RFC 8446 section
+// 7.5) into `out`, derived from the given label and context. The label is a
+// byte string that doesn't need to be NUL-terminated or valid UTF-8. Returns 0
+// on success, QUICHE_ERR_INVALID_STATE if the handshake is not complete, or
+// QUICHE_ERR_TLS_FAIL if the keying material can't be exported.
+int quiche_conn_export_keying_material(const quiche_conn *conn,
+                                       const uint8_t *label, size_t label_len,
+                                       const uint8_t *context, size_t context_len,
+                                       uint8_t *out, size_t out_len);
+
 // Returns the server name requested by the client.
 void quiche_conn_server_name(const quiche_conn *conn, const uint8_t **out, size_t *out_len);
 
