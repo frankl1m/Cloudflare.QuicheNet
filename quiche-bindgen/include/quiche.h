@@ -238,6 +238,7 @@ enum quiche_cc_algorithm {
     QUICHE_CC_RENO = 0,
     QUICHE_CC_CUBIC = 1,
     QUICHE_CC_BBR2_GCONGESTION = 4,
+    QUICHE_CC_BRUTAL = 5,
 };
 
 // Sets the congestion control algorithm used.
@@ -354,6 +355,11 @@ int quiche_conn_set_session(quiche_conn *conn, const uint8_t *buf, size_t buf_le
 // Sets the `max_idle_timeout` transport parameter, in milliseconds, default is
 // no timeout.
 int quiche_conn_set_max_idle_timeout(quiche_conn *conn, uint64_t v);
+
+// Sets the send rate of the Brutal congestion control algorithm, in bytes per
+// second, on all paths. A rate of 0 falls back to BBRv2. Returns
+// QUICHE_ERR_CONGESTION_CONTROL if the algorithm is not QUICHE_CC_BRUTAL.
+int quiche_conn_set_brutal_rate(quiche_conn *conn, uint64_t bytes_per_sec);
 
 typedef struct {
     // The remote address the packet was received from.
