@@ -17,6 +17,46 @@
 - x64: `68CA14B35A83E602C755C99F2AE6A1F7ABE8E5C0EF5978803A3FF98DE2F7DE0A`
 - x86: `4586BE949D97BFE1F4D5C84922CDACD5E1D746358B7F4F873B4F7FF246325BE6`
 
+## Linux (Debian 12)
+
+Las librerías de Linux se compilan con los cuatro parches aplicados, dentro de una distro WSL 2 con Debian 12.15. Esa distro sale de la imagen oficial `debian:12` de Docker Hub, verificada por SHA-256.
+
+**Toolchain:** glibc 2.36, rustc 1.98.1, cmake 3.25.1, clang 14.0.6 y `aarch64-linux-gnu-gcc` 12.2 para la compilación cruzada.
+
+| Fichero | SHA-256 |
+|---|---|
+| `linux-x64/libquiche_bindgen.so` | `c1b7a3e635a3c044183d7a9308c3e4e0e966a50ec69b1c7d002695bea80e3e89` |
+| `linux-arm64/libquiche_bindgen.so` | `a0a7e6a43614a807b6a78de4a17f964f76359726ad5ace15e3d3a8d58eaca271` |
+
+**Verificación:**
+
+- **Formato:** x86-64 y ARM aarch64 son ELF 64-bit shared object. Solo dependen de `libgcc_s.so.1` y `libc.so.6`, más el cargador en x86-64.
+- **glibc:** la versión más alta que requieren es `GLIBC_2.34`, así que cargan en Debian 12 (glibc 2.36) y en distribuciones más nuevas.
+- **Exports:** cada una tiene 172 con el prefijo `_quiche_` (`nm -D --defined-only`), igual que las DLL.
+
+  ```
+  x86_64:  00000000000f8830 T _quiche_conn_export_keying_material
+           00000000000f8af0 T _quiche_conn_set_brutal_rate
+           00000000000f8b30 T _quiche_conn_set_session
+  aarch64: 0000000000035310 T _quiche_conn_export_keying_material
+           00000000000353c8 T _quiche_conn_set_brutal_rate
+           00000000000353d8 T _quiche_conn_set_session
+  ```
+
+- **Pruebas de quiche en linux-x64** (`cargo test -p quiche --features ffi,qlog --lib`): **1067 passed, 0 failed**. Son las 1069 de Windows menos las dos de `send_info.at` exclusivas de Windows. En Linux, `send_info.at` ya usaba `CLOCK_MONOTONIC`, el mismo reloj que `Stopwatch` de .NET.
+- **Bindings:** el `NativeMethods.g.cs` que se genera en Linux solo difiere del del repo en `int` → `uint` en `socklen_t` (longitudes de `sockaddr`) y en algunos parámetros enum. Los dos son de 32 bits y la ABI es la misma, así que el `NativeMethods.g.cs` entregado sirve para Windows y Linux.
+- **arm64:** no se ha ejecutado en hardware arm64.
+
+**Cómo reproducirlo:** está en `scripts/debian12/` (ver su `README.md`):
+
+```powershell
+pwsh scripts/debian12/import-wsl.ps1
+wsl -d Debian12 --user root bash scripts/debian12/setup.sh
+wsl -d Debian12 --user root bash scripts/debian12/build.sh --tests
+```
+
+**Corrección del csproj de Linux:** `Cloudflare.QuicheNet.NativeAssets.Linux.csproj` ejecutaba `cargo cross build`, que no es un comando de cargo. Ahora ejecuta `cargo build --target-dir $(RustTargetDir)`, que necesita un host Linux.
+
 ## Commit base
 
 - QuicheNet `a85b3e790fa98eec5f7392c8b55b75c1749d536b`
