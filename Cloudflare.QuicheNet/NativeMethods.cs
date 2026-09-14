@@ -33,6 +33,9 @@ namespace Cloudflare.Quiche
                     case Architecture.Arm64:
                         archName = "arm64";
                         break;
+                    case Architecture.X86:
+                        archName = "x86";
+                        break;
                     default:
                         return IntPtr.Zero;
                 }

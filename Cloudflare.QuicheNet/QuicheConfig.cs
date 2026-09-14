@@ -109,12 +109,75 @@ public class QuicheConfig : IDisposable
     private QuicheCcAlgorithm ccAlgorithm;
     public QuicheCcAlgorithm CcAlgorithm
     {
+        get => ccAlgorithm;
         set
         {
+#pragma warning disable CS0618 // BBR and BBR2 were removed from quiche.
+            if (value is QuicheCcAlgorithm.QUICHE_CC_BBR or QuicheCcAlgorithm.QUICHE_CC_BBR2)
+            {
+                value = QuicheCcAlgorithm.QUICHE_CC_BBR2_GCONGESTION;
+            }
+#pragma warning restore CS0618
+
+            // quiche maps this value to a Rust enum: out of range values are undefined behavior.
+            if (!Enum.IsDefined(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown congestion control algorithm.");
+            }
+
             ccAlgorithm = value;
             unsafe
             {
                 NativePtr->SetCcAlgorithm((size_t)(int)ccAlgorithm);
+            }
+        }
+    }
+
+    private string? ccAlgorithmName;
+    public string? CcAlgorithmName
+    {
+        get => ccAlgorithmName;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            unsafe
+            {
+                fixed (byte* namePtr = Encoding.UTF8.GetBytes([.. value, '\0']))
+                {
+                    QuicheException.ThrowIfError((QuicheError)NativePtr->
+                        SetCcAlgorithmName(namePtr),
+                        "Failed to set congestion control algorithm for this instance.");
+                }
+            }
+
+            ccAlgorithmName = value;
+        }
+    }
+
+    private long maxConnectionWindow;
+    public long MaxConnectionWindow
+    {
+        get => maxConnectionWindow;
+        set
+        {
+            maxConnectionWindow = value;
+            unsafe
+            {
+                NativePtr->SetMaxConnectionWindow((ulong)maxConnectionWindow);
+            }
+        }
+    }
+
+    private long maxStreamWindow;
+    public long MaxStreamWindow
+    {
+        get => maxStreamWindow;
+        set
+        {
+            maxStreamWindow = value;
+            unsafe
+            {
+                NativePtr->SetMaxStreamWindow((ulong)maxStreamWindow);
             }
         }
     }

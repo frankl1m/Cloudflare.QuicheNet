@@ -35,7 +35,7 @@ public class QuicheListener : IDisposable
 
             if (connMap.TryGetValue(recvResult.RemoteEndPoint, out QuicheConnection? connection))
             {
-                connection.recvQueue.Enqueue(receivedBytes);
+                connection.EnqueueReceivedPacket(receivedBytes);
             }
             else
             {

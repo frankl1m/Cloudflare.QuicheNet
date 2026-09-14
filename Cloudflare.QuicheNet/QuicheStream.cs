@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.IO.Pipelines;
 
 namespace Cloudflare.QuicheNet
@@ -41,6 +41,10 @@ namespace Cloudflare.QuicheNet
 
         internal bool IsShuttingDown => disposedValue;
 
+        // Set once all written data was handed to the connection after disposal,
+        // so the FIN can't be sent before the last bytes.
+        internal bool IsWriteCompleted { get; private set; }
+
         internal QuicheStream(QuicheConnection conn, ulong streamId)
         {
             this.conn = conn;
@@ -82,62 +86,81 @@ namespace Cloudflare.QuicheNet
 
         public override void Flush()
         {
-            while (sendPipe is not null && sendPipe.Reader.TryRead(out ReadResult result))
+            if (sendPipe is null)
             {
-                conn.sendQueue.AddOrUpdate(streamId,
-                    key => result.Buffer.ToArray(),
-                    (key, buf) => [.. buf, .. result.Buffer.ToArray()]
-                    );
-                sendPipe.Reader.AdvanceTo(result.Buffer.End);
-                if (result.IsCompleted) break;
+                return;
+            }
+
+            // Called both by the application and by the connection's send loop;
+            // PipeReader doesn't support concurrent readers.
+            lock (sendPipe)
+            {
+                while (sendPipe.Reader.TryRead(out ReadResult result))
+                {
+                    if (!result.Buffer.IsEmpty)
+                    {
+                        conn.sendQueue.AddOrUpdate(streamId,
+                            key => result.Buffer.ToArray(),
+                            (key, buf) => [.. buf, .. result.Buffer.ToArray()]
+                            );
+                    }
+                    sendPipe.Reader.AdvanceTo(result.Buffer.End);
+                    if (result.IsCompleted || result.Buffer.IsEmpty) break;
+                }
             }
         }
 
+        // Blocks until data is available; returns 0 only at the end of the stream.
         public override int Read(byte[] buffer, int offset, int count)
         {
-            if (recvPipe is not null)
-            {
-                int bytesTotal = 0;
-                while (bytesTotal < count)
-                {
-                    if (recvPipe.Reader.TryRead(out ReadResult result))
-                    {
-                        int bytesRead = (int)Math.Min(result.Buffer.Length, count - bytesTotal);
+            return ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        }
 
-                        result.Buffer.Slice(result.Buffer.Start, bytesRead).CopyTo(buffer.AsSpan(offset + bytesTotal, bytesRead));
-                        recvPipe.Reader.AdvanceTo(result.Buffer.GetPosition(bytesRead));
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        }
 
-                        bytesTotal += bytesRead;
-                        if (result.IsCompleted) break;
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-
-                return bytesTotal;
-            }
-            else
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (recvPipe is null)
             {
                 throw new NotSupportedException("This stream is not readable.");
             }
+
+            if (buffer.IsEmpty)
+            {
+                return 0;
+            }
+
+            ReadResult result = await recvPipe.Reader.ReadAsync(cancellationToken);
+
+            int bytesRead = (int)Math.Min(result.Buffer.Length, buffer.Length);
+            result.Buffer.Slice(0, bytesRead).CopyTo(buffer.Span);
+            recvPipe.Reader.AdvanceTo(result.Buffer.GetPosition(bytesRead));
+
+            return bytesRead;
         }
 
-        public override async void Write(byte[] buffer, int offset, int count)
+        public override void Write(byte[] buffer, int offset, int count)
         {
-            if (sendPipe is not null)
-            {
-                Memory<byte> memory = sendPipe.Writer.GetMemory(count);
-                buffer.AsMemory(offset, count).CopyTo(memory);
-                sendPipe.Writer.Advance(count);
+            WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        }
 
-                await sendPipe.Writer.FlushAsync();
-            }
-            else
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            return WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        }
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (sendPipe is null)
             {
                 throw new NotSupportedException("This stream is not writable.");
             }
+
+            await sendPipe.Writer.WriteAsync(buffer, cancellationToken);
+            conn.NotifyStreamWrite();
         }
 
         public override long Seek(long offset, SeekOrigin origin) =>
@@ -165,6 +188,8 @@ namespace Cloudflare.QuicheNet
                     }
 
                     Flush();
+                    IsWriteCompleted = true;
+                    conn.NotifyStreamWrite();
                 }
             }
 

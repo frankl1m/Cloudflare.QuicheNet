@@ -45,7 +45,9 @@
 #endif
 #ifdef _MSC_VER
 #include <BaseTsd.h>
-#define ssize_t SSIZE_T
+// intptr_t (instead of SSIZE_T) makes bindgen emit isize, so the generated C#
+// bindings use nint and are the same for x86 and x64.
+#define ssize_t intptr_t
 #endif
 
 #if defined(__cplusplus)
