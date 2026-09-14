@@ -216,7 +216,7 @@ index 90d42a7..fe0f3ef 100644
      public int InitialCongestionWindowPackets
      {
 diff --git a/Cloudflare.QuicheNet/QuicheConnection.cs b/Cloudflare.QuicheNet/QuicheConnection.cs
-index b8f036e..cc90829 100644
+index b8f036e..518b937 100644
 --- a/Cloudflare.QuicheNet/QuicheConnection.cs
 +++ b/Cloudflare.QuicheNet/QuicheConnection.cs
 @@ -1,11 +1,10 @@
@@ -360,16 +360,14 @@ index b8f036e..cc90829 100644
      {
          EndPoint localEndPoint = socket.LocalEndPoint ?? throw new ArgumentException(
              "Given socket was not bound to a valid local endpoint!", nameof(socket));
-@@ -66,8 +168,7 @@ public class QuicheConnection : IDisposable
+@@ -66,7 +168,6 @@ public class QuicheConnection : IDisposable
          using (local)
          using (remote)
          {
 -            QuicheConnection conn;
--            byte[] hostnameBuf = Encoding.UTF8.GetBytes([.. hostname?.ToCharArray() ?? [], '\u0000']);
-+            byte[] hostnameBuf = Encoding.UTF8.GetBytes([.. hostname?.ToCharArray() ?? [], ' ']);
+             byte[] hostnameBuf = Encoding.UTF8.GetBytes([.. hostname?.ToCharArray() ?? [], '\u0000']);
              byte[] scidBuf = (byte[]?)cid?.Clone() ?? RandomNumberGenerator
                  .GetBytes((int)QuicheLibrary.MAX_CONN_ID_LEN);
-             unsafe
 @@ -75,18 +176,32 @@ public class QuicheConnection : IDisposable
                  fixed (byte* hostnamePtr = hostnameBuf)
                  fixed (byte* scidPtr = scidBuf)
