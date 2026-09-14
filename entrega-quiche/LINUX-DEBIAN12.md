@@ -17,6 +17,8 @@
 
 ## Cómo repetir el build
 
+Los comandos paso a paso para una máquina Debian 12, incluidos .NET y ExampleApp, están en [`scripts/debian12/COMPILAR-EN-DEBIAN.md`](../scripts/debian12/COMPILAR-EN-DEBIAN.md).
+
 Desde la raíz del repo, en Windows con WSL (detalles en `scripts/debian12/README.md`):
 
 ```powershell

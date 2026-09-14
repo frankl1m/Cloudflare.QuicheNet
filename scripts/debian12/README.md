@@ -15,3 +15,5 @@ On a Debian 12 machine, run `setup.sh` as root and then `build.sh`.
 `build.sh` copies the sources to `~/quichenet-build`, so the bindings generated in the repository (`NativeMethods.g.cs`) aren't overwritten. The libraries go to `entrega-quiche/linux-x64` and `entrega-quiche/linux-arm64`; set `OUT` to use another directory. Pass `--tests` to also run the quiche tests on linux-x64.
 
 Run the `wsl` commands from the repository root: WSL starts in the current Windows directory.
+
+Step-by-step commands for a Debian 12 machine, including .NET and ExampleApp, are in [COMPILAR-EN-DEBIAN.md](COMPILAR-EN-DEBIAN.md).
