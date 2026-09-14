@@ -1,0 +1,248 @@
+diff --git a/quiche/quiche/include/quiche.h b/quiche/quiche/include/quiche.h
+index 3afa20e2..27cc4255 100644
+--- a/quiche/quiche/include/quiche.h
++++ b/quiche/quiche/include/quiche.h
+@@ -513,6 +513,16 @@ void quiche_conn_peer_cert(const quiche_conn *conn, const uint8_t **out, size_t
+ // Returns the serialized cryptographic session for the connection.
+ void quiche_conn_session(const quiche_conn *conn, const uint8_t **out, size_t *out_len);
+ 
++// Exports keying material from the TLS session (RFC 5705, RFC 8446 section
++// 7.5) into `out`, derived from the given label and context. The label is a
++// byte string that doesn't need to be NUL-terminated or valid UTF-8. Returns 0
++// on success, QUICHE_ERR_INVALID_STATE if the handshake is not complete, or
++// QUICHE_ERR_TLS_FAIL if the keying material can't be exported.
++int quiche_conn_export_keying_material(const quiche_conn *conn,
++                                       const uint8_t *label, size_t label_len,
++                                       const uint8_t *context, size_t context_len,
++                                       uint8_t *out, size_t out_len);
++
+ // Returns the server name requested by the client.
+ void quiche_conn_server_name(const quiche_conn *conn, const uint8_t **out, size_t *out_len);
+ 
+diff --git a/quiche/quiche/src/ffi.rs b/quiche/quiche/src/ffi.rs
+index 3306b618..cfc25f28 100644
+--- a/quiche/quiche/src/ffi.rs
++++ b/quiche/quiche/src/ffi.rs
+@@ -1220,6 +1220,36 @@ pub extern "C" fn quiche_conn_session(
+     }
+ }
+ 
++#[no_mangle]
++pub extern "C" fn quiche_conn_export_keying_material(
++    conn: &Connection, label: *const u8, label_len: size_t,
++    context: *const u8, context_len: size_t, out: *mut u8, out_len: size_t,
++) -> c_int {
++    let label = if label_len == 0 {
++        &[]
++    } else {
++        unsafe { slice::from_raw_parts(label, label_len) }
++    };
++
++    let context = if context_len == 0 {
++        &[]
++    } else {
++        unsafe { slice::from_raw_parts(context, context_len) }
++    };
++
++    let out = if out_len == 0 {
++        &mut []
++    } else {
++        unsafe { slice::from_raw_parts_mut(out, out_len) }
++    };
++
++    match conn.export_keying_material(label, context, out) {
++        Ok(()) => 0,
++
++        Err(e) => e.to_c() as c_int,
++    }
++}
++
+ #[no_mangle]
+ pub extern "C" fn quiche_conn_server_name(
+     conn: &Connection, out: &mut *const u8, out_len: &mut size_t,
+diff --git a/quiche/quiche/src/lib.rs b/quiche/quiche/src/lib.rs
+index d08110e6..f22189fa 100644
+--- a/quiche/quiche/src/lib.rs
++++ b/quiche/quiche/src/lib.rs
+@@ -7609,6 +7609,30 @@ impl<F: BufFactory> Connection<F> {
+         self.session.as_deref()
+     }
+ 
++    /// Exports keying material from the TLS session, as described in
++    /// [RFC 5705] and [RFC 8446 section 7.5].
++    ///
++    /// `out` is filled with keying material derived from `label` and
++    /// `context`. The label is a byte string and doesn't need to be valid
++    /// UTF-8.
++    ///
++    /// Returns [`InvalidState`] if the handshake is not complete yet, or
++    /// [`TlsFail`] if the keying material can't be exported.
++    ///
++    /// [RFC 5705]: https://www.rfc-editor.org/rfc/rfc5705
++    /// [RFC 8446 section 7.5]: https://www.rfc-editor.org/rfc/rfc8446#section-7.5
++    /// [`InvalidState`]: enum.Error.html#variant.InvalidState
++    /// [`TlsFail`]: enum.Error.html#variant.TlsFail
++    pub fn export_keying_material(
++        &self, label: &[u8], context: &[u8], out: &mut [u8],
++    ) -> Result<()> {
++        if !self.is_established() {
++            return Err(Error::InvalidState);
++        }
++
++        self.handshake.export_keying_material(label, context, out)
++    }
++
+     /// Returns the source connection ID.
+     ///
+     /// When there are multiple IDs, and if there is an active path, the ID used
+diff --git a/quiche/quiche/src/tests.rs b/quiche/quiche/src/tests.rs
+index b22be3a3..68e99421 100644
+--- a/quiche/quiche/src/tests.rs
++++ b/quiche/quiche/src/tests.rs
+@@ -216,6 +216,78 @@ fn transport_params_unknown_is_reserved() {
+     assert!(reserved_unknown_param.is_reserved());
+     assert!(!not_reserved_unknown_param.is_reserved());
+ }
++#[test]
++fn export_keying_material() {
++    // Raw UUID bytes, as used by TUIC v5, which are not valid UTF-8.
++    const LABEL: [u8; 16] = [
++        0xff, 0xfe, 0x00, 0x80, 0xc3, 0x28, 0xa0, 0xa1, 0xe2, 0x28, 0xa1, 0xf0,
++        0x90, 0x28, 0xbc, 0x0f,
++    ];
++    const CONTEXT: &[u8] = b"password";
++
++    assert!(std::str::from_utf8(&LABEL).is_err());
++
++    let mut pipe = test_utils::Pipe::new("cubic").unwrap();
++
++    // Not available before the handshake completes.
++    let mut out = [0; 32];
++    assert_eq!(
++        pipe.client.export_keying_material(&LABEL, CONTEXT, &mut out),
++        Err(Error::InvalidState)
++    );
++    assert_eq!(
++        pipe.server.export_keying_material(&LABEL, CONTEXT, &mut out),
++        Err(Error::InvalidState)
++    );
++
++    assert_eq!(pipe.handshake(), Ok(()));
++
++    let mut client_out = [0; 32];
++    let mut server_out = [0; 32];
++    assert_eq!(
++        pipe.client
++            .export_keying_material(&LABEL, CONTEXT, &mut client_out),
++        Ok(())
++    );
++    assert_eq!(
++        pipe.server
++            .export_keying_material(&LABEL, CONTEXT, &mut server_out),
++        Ok(())
++    );
++    assert_eq!(client_out, server_out);
++    assert_ne!(client_out, [0; 32]);
++
++    // A different context gives different keying material.
++    let mut other_out = [0; 32];
++    assert_eq!(
++        pipe.client
++            .export_keying_material(&LABEL, b"passw0rd", &mut other_out),
++        Ok(())
++    );
++    assert_ne!(other_out, client_out);
++
++    // So does a different label.
++    let mut other_label = LABEL;
++    other_label[15] ^= 0x01;
++    assert_eq!(
++        pipe.client
++            .export_keying_material(&other_label, CONTEXT, &mut other_out),
++        Ok(())
++    );
++    assert_ne!(other_out, client_out);
++
++    let mut server_other_out = [0; 32];
++    assert_eq!(
++        pipe.server.export_keying_material(
++            &other_label,
++            CONTEXT,
++            &mut server_other_out
++        ),
++        Ok(())
++    );
++    assert_eq!(server_other_out, other_out);
++}
++
+ #[test]
+ fn unknown_version() {
+     let mut config = Config::new(0xbabababa).unwrap();
+diff --git a/quiche/quiche/src/tls/mod.rs b/quiche/quiche/src/tls/mod.rs
+index e5205f41..f96dc3eb 100644
+--- a/quiche/quiche/src/tls/mod.rs
++++ b/quiche/quiche/src/tls/mod.rs
+@@ -584,6 +584,29 @@ impl Handshake {
+         unsafe { SSL_session_reused(self.as_ptr()) == 1 }
+     }
+ 
++    pub fn export_keying_material(
++        &self, label: &[u8], context: &[u8], out: &mut [u8],
++    ) -> Result<()> {
++        let rc = unsafe {
++            SSL_export_keying_material(
++                self.ptr,
++                out.as_mut_ptr(),
++                out.len(),
++                label.as_ptr() as *const c_char,
++                label.len(),
++                context.as_ptr(),
++                context.len(),
++                1,
++            )
++        };
++
++        if rc != 1 {
++            return Err(Error::TlsFail);
++        }
++
++        Ok(())
++    }
++
+     pub fn clear(&mut self) -> Result<()> {
+         let rc = unsafe { SSL_clear(self.as_mut_ptr()) };
+         self.map_result_ssl(rc)
+@@ -1199,6 +1222,12 @@ extern "C" {
+ 
+     fn SSL_session_reused(ssl: *const SSL) -> c_int;
+ 
++    fn SSL_export_keying_material(
++        ssl: *mut SSL, out: *mut u8, out_len: usize, label: *const c_char,
++        label_len: usize, context: *const u8, context_len: usize,
++        use_context: c_int,
++    ) -> c_int;
++
+     fn SSL_in_init(ssl: *const SSL) -> c_int;
+ 
+     fn SSL_clear(ssl: *mut SSL) -> c_int;
+diff --git a/quiche-bindgen/include/quiche.h b/quiche-bindgen/include/quiche.h
+index 9b3391d..ed1195d 100644
+--- a/quiche-bindgen/include/quiche.h
++++ b/quiche-bindgen/include/quiche.h
+@@ -507,6 +507,16 @@ void quiche_conn_peer_cert(const quiche_conn *conn, const uint8_t **out, size_t
+ // Returns the serialized cryptographic session for the connection.
+ void quiche_conn_session(const quiche_conn *conn, const uint8_t **out, size_t *out_len);
+ 
++// Exports keying material from the TLS session (RFC 5705, RFC 8446 section
++// 7.5) into `out`, derived from the given label and context. The label is a
++// byte string that doesn't need to be NUL-terminated or valid UTF-8. Returns 0
++// on success, QUICHE_ERR_INVALID_STATE if the handshake is not complete, or
++// QUICHE_ERR_TLS_FAIL if the keying material can't be exported.
++int quiche_conn_export_keying_material(const quiche_conn *conn,
++                                       const uint8_t *label, size_t label_len,
++                                       const uint8_t *context, size_t context_len,
++                                       uint8_t *out, size_t out_len);
++
+ // Returns the server name requested by the client.
+ void quiche_conn_server_name(const quiche_conn *conn, const uint8_t **out, size_t *out_len);
+ 

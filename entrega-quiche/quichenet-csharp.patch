@@ -1,0 +1,1468 @@
+diff --git a/Cloudflare.QuicheNet.NativeAssets.Linux/Cloudflare.QuicheNet.NativeAssets.Linux.csproj b/Cloudflare.QuicheNet.NativeAssets.Linux/Cloudflare.QuicheNet.NativeAssets.Linux.csproj
+index 06fc891..85dd621 100644
+--- a/Cloudflare.QuicheNet.NativeAssets.Linux/Cloudflare.QuicheNet.NativeAssets.Linux.csproj
++++ b/Cloudflare.QuicheNet.NativeAssets.Linux/Cloudflare.QuicheNet.NativeAssets.Linux.csproj
+@@ -1,7 +1,7 @@
+ <Project Sdk="Microsoft.NET.Sdk">
+ 
+ 	<PropertyGroup>
+-		<TargetFramework>net10.0</TargetFramework>
++		<TargetFrameworks>net7.0;net8.0;net10.0</TargetFrameworks>
+ 		<RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+ 		<ImplicitUsings>enable</ImplicitUsings>
+ 		<Nullable>enable</Nullable>
+diff --git a/Cloudflare.QuicheNet.NativeAssets.Win32/Cloudflare.QuicheNet.NativeAssets.Win32.csproj b/Cloudflare.QuicheNet.NativeAssets.Win32/Cloudflare.QuicheNet.NativeAssets.Win32.csproj
+index 26e5a02..02b0c1d 100644
+--- a/Cloudflare.QuicheNet.NativeAssets.Win32/Cloudflare.QuicheNet.NativeAssets.Win32.csproj
++++ b/Cloudflare.QuicheNet.NativeAssets.Win32/Cloudflare.QuicheNet.NativeAssets.Win32.csproj
+@@ -1,8 +1,8 @@
+ <Project Sdk="Microsoft.NET.Sdk">
+ 
+ 	<PropertyGroup>
+-		<TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>
+-		<RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
++		<TargetFrameworks>net7.0;net8.0;net10.0;net10.0-windows</TargetFrameworks>
++		<RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
+ 		<ImplicitUsings>enable</ImplicitUsings>
+ 		<Nullable>enable</Nullable>
+ 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+@@ -29,13 +29,17 @@
+ 
+ 	<PropertyGroup>
+ 		<RustTargetTriple Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</RustTargetTriple>
++		<RustTargetTriple Condition="'$(RuntimeIdentifier)' == 'win-x86'">i686-pc-windows-msvc</RustTargetTriple>
+ 		<RustTargetTriple Condition="'$(RuntimeIdentifier)' == 'win-arm64'">aarch64-pc-windows-msvc</RustTargetTriple>
+ 		<RustLibraryFileName Condition="'$(RuntimeIdentifier)' == 'win-x64'">quiche_bindgen.dll</RustLibraryFileName>
++		<RustLibraryFileName Condition="'$(RuntimeIdentifier)' == 'win-x86'">quiche_bindgen.dll</RustLibraryFileName>
+ 		<RustLibraryFileName Condition="'$(RuntimeIdentifier)' == 'win-arm64'">quiche_bindgen.dll</RustLibraryFileName>
++		<!-- Override with a short path (e.g. C:\q) if the build exceeds MAX_PATH. -->
++		<RustTargetDir Condition="'$(RustTargetDir)' == ''">../quiche-bindgen/target</RustTargetDir>
+ 	</PropertyGroup>
+ 
+ 	<ItemGroup>
+-		<RustTargetOutput Include="../quiche-bindgen/target/$(RustTargetTriple)/release/$(RustLibraryFileName)" />
++		<RustTargetOutput Include="$(RustTargetDir)/$(RustTargetTriple)/release/$(RustLibraryFileName)" />
+ 		<NativeLibs Include="runtimes/**" />
+ 		<None Include="@(NativeLibs)" PackagePath="runtimes/">
+ 			<Pack>true</Pack>
+@@ -53,9 +57,9 @@
+ 
+ 	<Target Condition="'$(RuntimeIdentifier)' != ''" Name="rustc" BeforeTargets="PreBuildEvent">
+ 		<Exec WorkingDirectory="../quiche-bindgen" Command="rustup target add $(RustTargetTriple)" />
+-		
+-		<Exec WorkingDirectory="../quiche-bindgen" Command="cargo build --target $(RustTargetTriple) --profile release" />
++
++		<Exec WorkingDirectory="../quiche-bindgen" Command="cargo build --target $(RustTargetTriple) --profile release --target-dir &quot;$(RustTargetDir)&quot;" />
+ 
+ 		<Copy SourceFiles="@(RustTargetOutput)" DestinationFolder="runtimes/$(RuntimeIdentifier)/native" />
+ 	</Target>
+-</Project>
+\ No newline at end of file
++</Project>
+diff --git a/Cloudflare.QuicheNet.NativeAssets.macOS/Cloudflare.QuicheNet.NativeAssets.macOS.csproj b/Cloudflare.QuicheNet.NativeAssets.macOS/Cloudflare.QuicheNet.NativeAssets.macOS.csproj
+index ce193fa..9cffb56 100644
+--- a/Cloudflare.QuicheNet.NativeAssets.macOS/Cloudflare.QuicheNet.NativeAssets.macOS.csproj
++++ b/Cloudflare.QuicheNet.NativeAssets.macOS/Cloudflare.QuicheNet.NativeAssets.macOS.csproj
+@@ -1,7 +1,7 @@
+ <Project Sdk="Microsoft.NET.Sdk">
+ 
+ 	<PropertyGroup>
+-		<TargetFrameworks>net10.0;net10.0-macos</TargetFrameworks>
++		<TargetFrameworks>net7.0;net8.0;net10.0;net10.0-macos</TargetFrameworks>
+ 		<RuntimeIdentifiers>osx-x64;osx-arm64</RuntimeIdentifiers>
+ 		<ImplicitUsings>enable</ImplicitUsings>
+ 		<Nullable>enable</Nullable>
+diff --git a/Cloudflare.QuicheNet/Cloudflare.QuicheNet.csproj b/Cloudflare.QuicheNet/Cloudflare.QuicheNet.csproj
+index e7b22e1..b1609e0 100644
+--- a/Cloudflare.QuicheNet/Cloudflare.QuicheNet.csproj
++++ b/Cloudflare.QuicheNet/Cloudflare.QuicheNet.csproj
+@@ -1,7 +1,8 @@
+ ﻿<Project Sdk="Microsoft.NET.Sdk">
+ 
+ 	<PropertyGroup>
+-		<TargetFrameworks>net10.0;net10.0-windows;net10.0-macos;net10.0-android;net10.0-ios</TargetFrameworks>
++		<TargetFrameworks>net7.0;net8.0;net10.0;net10.0-windows;net10.0-macos;net10.0-android;net10.0-ios</TargetFrameworks>
++		<LangVersion>latest</LangVersion>
+ 		<ImplicitUsings>enable</ImplicitUsings>
+ 		<Nullable>enable</Nullable>
+ 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+@@ -43,16 +44,20 @@
+ 		</PackageReference>
+ 	</ItemGroup>
+ 
++	<ItemGroup Condition="'$(TargetFramework)' == 'net7.0' Or '$(TargetFramework)' == 'net8.0'">
++		<PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
++	</ItemGroup>
++
+ 	<ItemGroup>
+-		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0'"
++		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0' Or '$(TargetFramework)' == 'net8.0' Or '$(TargetFramework)' == 'net7.0'"
+ 			Include="../Cloudflare.QuicheNet.NativeAssets.Linux/Cloudflare.QuicheNet.NativeAssets.Linux.csproj">
+ 			<ReferenceOutputAssembly>$(IsNuGetBuild)</ReferenceOutputAssembly>
+ 		</ProjectReference>
+-		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0'"
++		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0' Or '$(TargetFramework)' == 'net8.0' Or '$(TargetFramework)' == 'net7.0'"
+ 			Include="../Cloudflare.QuicheNet.NativeAssets.macOS/Cloudflare.QuicheNet.NativeAssets.macOS.csproj">
+ 			<ReferenceOutputAssembly>$(IsNuGetBuild)</ReferenceOutputAssembly>
+ 		</ProjectReference>
+-		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0'"
++		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0' Or '$(TargetFramework)' == 'net8.0' Or '$(TargetFramework)' == 'net7.0'"
+ 			Include="../Cloudflare.QuicheNet.NativeAssets.Win32/Cloudflare.QuicheNet.NativeAssets.Win32.csproj">
+ 			<ReferenceOutputAssembly>$(IsNuGetBuild)</ReferenceOutputAssembly>
+ 		</ProjectReference>
+diff --git a/Cloudflare.QuicheNet/NativeMethods.cs b/Cloudflare.QuicheNet/NativeMethods.cs
+index f8c23e1..8f34f05 100644
+--- a/Cloudflare.QuicheNet/NativeMethods.cs
++++ b/Cloudflare.QuicheNet/NativeMethods.cs
+@@ -33,6 +33,9 @@ namespace Cloudflare.Quiche
+                     case Architecture.Arm64:
+                         archName = "arm64";
+                         break;
++                    case Architecture.X86:
++                        archName = "x86";
++                        break;
+                     default:
+                         return IntPtr.Zero;
+                 }
+diff --git a/Cloudflare.QuicheNet/QuicheCcAlgorithm.cs b/Cloudflare.QuicheNet/QuicheCcAlgorithm.cs
+index 14c2f62..f161052 100644
+--- a/Cloudflare.QuicheNet/QuicheCcAlgorithm.cs
++++ b/Cloudflare.QuicheNet/QuicheCcAlgorithm.cs
+@@ -1,9 +1,13 @@
+-﻿namespace Cloudflare.QuicheNet;
++namespace Cloudflare.QuicheNet;
+ 
+ public enum QuicheCcAlgorithm
+ {
+     QUICHE_CC_RENO = 0,
+     QUICHE_CC_CUBIC = 1,
++    [Obsolete("Removed from quiche; mapped to QUICHE_CC_BBR2_GCONGESTION.")]
+     QUICHE_CC_BBR = 2,
++    [Obsolete("Removed from quiche; mapped to QUICHE_CC_BBR2_GCONGESTION.")]
+     QUICHE_CC_BBR2 = 3,
+-}
+\ No newline at end of file
++    QUICHE_CC_BBR2_GCONGESTION = 4,
++    QUICHE_CC_BRUTAL = 5,
++}
+diff --git a/Cloudflare.QuicheNet/QuicheConfig.cs b/Cloudflare.QuicheNet/QuicheConfig.cs
+index 90d42a7..fe0f3ef 100644
+--- a/Cloudflare.QuicheNet/QuicheConfig.cs
++++ b/Cloudflare.QuicheNet/QuicheConfig.cs
+@@ -109,8 +109,22 @@ public class QuicheConfig : IDisposable
+     private QuicheCcAlgorithm ccAlgorithm;
+     public QuicheCcAlgorithm CcAlgorithm
+     {
++        get => ccAlgorithm;
+         set
+         {
++#pragma warning disable CS0618 // BBR and BBR2 were removed from quiche.
++            if (value is QuicheCcAlgorithm.QUICHE_CC_BBR or QuicheCcAlgorithm.QUICHE_CC_BBR2)
++            {
++                value = QuicheCcAlgorithm.QUICHE_CC_BBR2_GCONGESTION;
++            }
++#pragma warning restore CS0618
++
++            // quiche maps this value to a Rust enum: out of range values are undefined behavior.
++            if (!Enum.IsDefined(value))
++            {
++                throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown congestion control algorithm.");
++            }
++
+             ccAlgorithm = value;
+             unsafe
+             {
+@@ -119,6 +133,55 @@ public class QuicheConfig : IDisposable
+         }
+     }
+ 
++    private string? ccAlgorithmName;
++    public string? CcAlgorithmName
++    {
++        get => ccAlgorithmName;
++        set
++        {
++            ArgumentNullException.ThrowIfNull(value);
++            unsafe
++            {
++                fixed (byte* namePtr = Encoding.UTF8.GetBytes([.. value, '\0']))
++                {
++                    QuicheException.ThrowIfError((QuicheError)NativePtr->
++                        SetCcAlgorithmName(namePtr),
++                        "Failed to set congestion control algorithm for this instance.");
++                }
++            }
++
++            ccAlgorithmName = value;
++        }
++    }
++
++    private long maxConnectionWindow;
++    public long MaxConnectionWindow
++    {
++        get => maxConnectionWindow;
++        set
++        {
++            maxConnectionWindow = value;
++            unsafe
++            {
++                NativePtr->SetMaxConnectionWindow((ulong)maxConnectionWindow);
++            }
++        }
++    }
++
++    private long maxStreamWindow;
++    public long MaxStreamWindow
++    {
++        get => maxStreamWindow;
++        set
++        {
++            maxStreamWindow = value;
++            unsafe
++            {
++                NativePtr->SetMaxStreamWindow((ulong)maxStreamWindow);
++            }
++        }
++    }
++
+     private int initialCongestionWindowPackets;
+     public int InitialCongestionWindowPackets
+     {
+diff --git a/Cloudflare.QuicheNet/QuicheConnection.cs b/Cloudflare.QuicheNet/QuicheConnection.cs
+index b8f036e..bc61658 100644
+--- a/Cloudflare.QuicheNet/QuicheConnection.cs
++++ b/Cloudflare.QuicheNet/QuicheConnection.cs
+@@ -1,11 +1,10 @@
+ using Cloudflare.Quiche;
+ using System.Buffers;
+ using System.Collections.Concurrent;
++using System.Diagnostics;
+ using System.Diagnostics.CodeAnalysis;
+ using System.Net;
+ using System.Net.Sockets;
+-using System.Runtime.CompilerServices;
+-using System.Runtime.InteropServices;
+ using System.Security.Cryptography;
+ using System.Text;
+ using System.Threading.Channels;
+@@ -17,12 +16,71 @@ namespace Cloudflare.QuicheNet;
+ 
+ public class QuicheConnection : IDisposable
+ {
++    // Packets whose release time is at most this far into the future are sent
++    // right away. quiche itself releases packets up to 1-5 ms early.
++    private const long PACING_TOLERANCE_NS = 2_000_000;
++
++    // Below this delay the emitter spins instead of sleeping, since sleeps can
++    // take a whole timer tick (~15.6 ms) on Windows.
++    private const long PACING_SLEEP_THRESHOLD_NS = 20_000_000;
++
++    private const int MAX_PACKETS_PER_BATCH = 64;
++
++    // Upper bound for idle waits, so that state changes are never missed.
++    private static readonly TimeSpan MAX_IDLE_WAIT = TimeSpan.FromMilliseconds(75);
++
+     private static (MemoryHandle, int) GetSocketAddress(EndPoint? endPoint)
+     {
+-        Memory<byte>? buf = endPoint?.Serialize().Buffer;
+-        return buf is null ? default : (buf.Value.Pin(), buf.Value.Length);
++        if (endPoint is null)
++        {
++            return default;
++        }
++
++        SocketAddress address = endPoint.Serialize();
++#if NET8_0_OR_GREATER
++        Memory<byte> buf = address.Buffer;
++        return (buf.Pin(), buf.Length);
++#else
++        byte[] buf = new byte[address.Size];
++        for (int i = 0; i < buf.Length; i++)
++        {
++            buf[i] = address[i];
++        }
++        return (buf.AsMemory().Pin(), buf.Length);
++#endif
+     }
+ 
++    // Monotonic time in the clock domain of quiche_send_info.at
++    // (QueryPerformanceCounter on Windows, CLOCK_MONOTONIC on Linux).
++    private static long GetTimestampNs()
++    {
++        long ticks = Stopwatch.GetTimestamp();
++        long frequency = Stopwatch.Frequency;
++        return ticks / frequency * 1_000_000_000L + ticks % frequency * 1_000_000_000L / frequency;
++    }
++
++    private static async Task WaitAsync(Task signal, TimeSpan timeout, CancellationToken cancellationToken)
++    {
++        try
++        {
++            await signal.WaitAsync(timeout, cancellationToken);
++        }
++        catch (TimeoutException) { }
++    }
++
++    private sealed class Signal
++    {
++        private TaskCompletionSource tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
++
++        // Capture before checking for work, then await it to avoid lost wakeups.
++        public Task Task => Volatile.Read(ref tcs).Task;
++
++        public void Set() => Interlocked.Exchange(ref tcs,
++            new(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
++    }
++
++    private readonly record struct OutgoingPacket(byte[] Data, long AtNs);
++
+     internal static QuicheConnection Accept(Socket socket,
+         EndPoint remoteEndPoint, ReadOnlyMemory<byte> initialData,
+         QuicheConfig config, byte[]? cid = null)
+@@ -54,8 +112,47 @@ public class QuicheConnection : IDisposable
+         }
+     }
+ 
+-    public static async Task<QuicheConnection> ConnectAsync(Socket socket, EndPoint remoteEndPoint,
++    public static Task<QuicheConnection> ConnectAsync(Socket socket, EndPoint remoteEndPoint,
+         QuicheConfig config, string? hostname = null, byte[]? cid = null, CancellationToken cancellationToken = default)
++    {
++        return ConnectAsync(socket, remoteEndPoint, config, ReadOnlyMemory<byte>.Empty,
++            hostname, cid, cancellationToken);
++    }
++
++    /// <summary>
++    /// Connects resuming the given serialized TLS session (see <see cref="Session"/>).
++    /// If early data is enabled in <paramref name="config"/> and the session allows it,
++    /// the task completes as soon as 0-RTT data can be sent, before the handshake finishes.
++    /// </summary>
++    public static async Task<QuicheConnection> ConnectAsync(Socket socket, EndPoint remoteEndPoint,
++        QuicheConfig config, ReadOnlyMemory<byte> session, string? hostname = null, byte[]? cid = null,
++        CancellationToken cancellationToken = default)
++    {
++        QuicheConnection conn = Connect(socket, remoteEndPoint, config, session, hostname, cid);
++
++        if (session.IsEmpty || !config.IsEarlyDataEnabled)
++        {
++            await conn.ConnectionEstablishedTask.WaitAsync(cancellationToken);
++        }
++        else
++        {
++            while (!conn.ConnectionEstablishedTask.IsCompleted && !conn.IsInEarlyData)
++            {
++                await Task.WhenAny(conn.ConnectionEstablishedTask, Task.Delay(1, cancellationToken));
++                cancellationToken.ThrowIfCancellationRequested();
++            }
++
++            if (conn.ConnectionEstablishedTask.IsFaulted)
++            {
++                await conn.ConnectionEstablishedTask;
++            }
++        }
++
++        return conn;
++    }
++
++    private static QuicheConnection Connect(Socket socket, EndPoint remoteEndPoint,
++        QuicheConfig config, ReadOnlyMemory<byte> session, string? hostname, byte[]? cid)
+     {
+         EndPoint localEndPoint = socket.LocalEndPoint ?? throw new ArgumentException(
+             "Given socket was not bound to a valid local endpoint!", nameof(socket));
+@@ -66,8 +163,7 @@ public class QuicheConnection : IDisposable
+         using (local)
+         using (remote)
+         {
+-            QuicheConnection conn;
+-            byte[] hostnameBuf = Encoding.UTF8.GetBytes([.. hostname?.ToCharArray() ?? [], '\u0000']);
++            byte[] hostnameBuf = Encoding.UTF8.GetBytes([.. hostname?.ToCharArray() ?? [], ' ']);
+             byte[] scidBuf = (byte[]?)cid?.Clone() ?? RandomNumberGenerator
+                 .GetBytes((int)QuicheLibrary.MAX_CONN_ID_LEN);
+             unsafe
+@@ -75,18 +171,32 @@ public class QuicheConnection : IDisposable
+                 fixed (byte* hostnamePtr = hostnameBuf)
+                 fixed (byte* scidPtr = scidBuf)
+                 {
+-                    conn = new(quiche_connect(hostnamePtr,
++                    quiche_conn* nativePtr = quiche_connect(hostnamePtr,
+                         scidPtr, (nuint)scidBuf.Length,
+                         (sockaddr*)local.Pointer, (size_t)local_len,
+                         (sockaddr*)remote.Pointer, (size_t)remote_len,
+-                        config.NativePtr),
++                        config.NativePtr);
++
++                    // The session must be set before the first packet is sent.
++                    if (nativePtr is not null && !session.IsEmpty)
++                    {
++                        fixed (byte* sessionPtr = session.Span)
++                        {
++                            int errorCode = nativePtr->SetSession(sessionPtr, (nuint)session.Length);
++                            if (errorCode < 0)
++                            {
++                                nativePtr->Free();
++                                QuicheException.ThrowIfError((QuicheError)errorCode,
++                                    "Failed to set TLS session for this connection.");
++                            }
++                        }
++                    }
++
++                    return new(nativePtr,
+                         config, socket, remoteEndPoint,
+                         ReadOnlyMemory<byte>.Empty, scidBuf);
+                 }
+             }
+-
+-            await conn.ConnectionEstablishedTask.WaitAsync(cancellationToken);
+-            return conn;
+         }
+     }
+ 
+@@ -94,6 +204,7 @@ public class QuicheConnection : IDisposable
+ 
+     private readonly Task? listenTask, recvDgramTask, sendDgramTask;
+     private readonly Task recvTask, recvStreamTask, sendTask, sendStreamTask;
++    private readonly Thread emitThread;
+     private readonly CancellationTokenSource cts;
+ 
+     private readonly TaskCompletionSource establishedTcs;
+@@ -107,7 +218,15 @@ public class QuicheConnection : IDisposable
+     private readonly EndPoint remoteEndPoint;
+ 
+     internal readonly ConcurrentDictionary<ulong, byte[]> sendQueue;
+-    internal readonly ConcurrentQueue<ReadOnlyMemory<byte>> recvQueue;
++
++    private readonly Channel<ReadOnlyMemory<byte>> recvChannel;
++
++    private readonly ConcurrentQueue<OutgoingPacket> packetQueue;
++    private readonly SemaphoreSlim packetSignal;
++
++    // recvSignal: a packet was processed. sendSignal: there may be something new to send.
++    // sentSignal: packets were generated. streamWriteSignal: a stream was written to.
++    private readonly Signal recvSignal, sendSignal, sentSignal, streamWriteSignal;
+ 
+     private readonly byte[] connectionId;
+     internal ReadOnlySpan<byte> ConnectionId => connectionId;
+@@ -132,6 +251,77 @@ public class QuicheConnection : IDisposable
+         }
+     }
+ 
++    public bool IsEstablished
++    {
++        get
++        {
++            unsafe
++            {
++                lock (this)
++                {
++                    return NativePtr is not null && NativePtr->IsEstablished();
++                }
++            }
++        }
++    }
++
++    public bool IsInEarlyData
++    {
++        get
++        {
++            unsafe
++            {
++                lock (this)
++                {
++                    return NativePtr is not null && NativePtr->IsInEarlyData();
++                }
++            }
++        }
++    }
++
++    public bool IsResumed
++    {
++        get
++        {
++            unsafe
++            {
++                lock (this)
++                {
++                    return NativePtr is not null && NativePtr->IsResumed();
++                }
++            }
++        }
++    }
++
++    /// <summary>
++    /// The serialized TLS session of this connection, which can be passed to
++    /// <see cref="ConnectAsync(Socket, EndPoint, QuicheConfig, ReadOnlyMemory{byte}, string, byte[], CancellationToken)"/>
++    /// to resume it later. Only available on clients, after the server sent a session ticket.
++    /// </summary>
++    public byte[]? Session
++    {
++        get
++        {
++            unsafe
++            {
++                lock (this)
++                {
++                    if (NativePtr is null)
++                    {
++                        return null;
++                    }
++
++                    byte* sessionPtr = null;
++                    nuint sessionLen = 0;
++                    NativePtr->Session(&sessionPtr, &sessionLen);
++
++                    return sessionLen == 0 ? null :
++                        new ReadOnlySpan<byte>(sessionPtr, (int)sessionLen).ToArray();
++                }
++            }
++        }
++    }
++
+     public long MaxDatagramSize
+     {
+         get
+@@ -161,7 +351,16 @@ public class QuicheConnection : IDisposable
+         connectionId.CopyTo(this.connectionId);
+ 
+         sendQueue = new();
+-        recvQueue = new();
++        recvChannel = Channel.CreateUnbounded<ReadOnlyMemory<byte>>(
++            new UnboundedChannelOptions { SingleReader = true });
++
++        packetQueue = new();
++        packetSignal = new(0);
++
++        recvSignal = new();
++        sendSignal = new();
++        sentSignal = new();
++        streamWriteSignal = new();
+ 
+         streamMap = new();
+         streamChannel = Channel.CreateUnbounded<QuicheStream>();
+@@ -172,10 +371,22 @@ public class QuicheConnection : IDisposable
+             dgramRecvChannel = Channel.CreateBounded<byte[]>(config.DatagramOptions.ReceiveQueueLength);
+         }
+ 
+-        establishedTcs = new();
++        establishedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+ 
+         cts = new();
+ 
++        if (!initialData.IsEmpty)
++        {
++            recvChannel.Writer.TryWrite(initialData);
++        }
++
++        emitThread = new Thread(EmitPackets)
++        {
++            IsBackground = true,
++            Name = "QuicheNet packet emitter",
++        };
++        emitThread.Start();
++
+         recvTask = Task.Run(() => ReceiveAsync(cts.Token));
+         sendTask = Task.Run(() => SendAsync(cts.Token));
+ 
+@@ -192,99 +403,272 @@ public class QuicheConnection : IDisposable
+         {
+             listenTask = Task.Run(() => ListenAsync(cts.Token));
+         }
+-        else
+-        {
+-            recvQueue.Enqueue(initialData);
+-        }
+     }
+ 
+-    private class SendScheduleInfo
++    internal void EnqueueReceivedPacket(ReadOnlyMemory<byte> packet)
+     {
+-        private readonly byte[] sendBuffer;
+-        private int sendCount;
++        recvChannel.Writer.TryWrite(packet);
++    }
+ 
+-        public ReadOnlySpan<byte> SendBufferData => sendBuffer.AsSpan(0, sendCount);
++    internal void NotifyStreamWrite()
++    {
++        streamWriteSignal.Set();
++    }
+ 
+-        public SendScheduleInfo()
+-        {
+-            sendBuffer = new byte[QuicheLibrary.MAX_DATAGRAM_LEN];
+-        }
++    // Must be called while holding the connection lock.
++    private void OnClosed()
++    {
++        recvChannel.Writer.TryComplete();
++        establishedTcs.TrySetException(new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed."));
++
++        recvSignal.Set();
++        sendSignal.Set();
++        sentSignal.Set();
++        streamWriteSignal.Set();
++    }
+ 
+-        public void Update(ReadOnlySpan<byte> newBufferData) 
++    /// <summary>
++    /// Sets the send rate of the Brutal congestion control algorithm, in bytes per second.
++    /// A rate of 0 falls back to BBRv2. Requires <see cref="QuicheCcAlgorithm.QUICHE_CC_BRUTAL"/>.
++    /// </summary>
++    public void SetBrutalRate(ulong bytesPerSecond)
++    {
++        unsafe
+         {
+             lock (this)
+             {
+-                newBufferData.CopyTo(sendBuffer);
+-                sendCount = newBufferData.Length;
++                ObjectDisposedException.ThrowIf(NativePtr is null, this);
++
++                QuicheException.ThrowIfError((QuicheError)NativePtr->SetBrutalRate(bytesPerSecond),
++                    "Failed to set Brutal send rate for this connection.");
+             }
+         }
++
++        sendSignal.Set();
++    }
++
++    /// <summary>
++    /// Exports keying material from the TLS session (RFC 5705, RFC 8446 section 7.5).
++    /// The label is passed as raw bytes and does not need to be valid UTF-8.
++    /// Throws QUICHE_ERR_INVALID_STATE before the handshake completes.
++    /// </summary>
++    public byte[] ExportKeyingMaterial(ReadOnlySpan<byte> label, ReadOnlySpan<byte> context, int length)
++    {
++        byte[] output = new byte[length];
++        ExportKeyingMaterial(label, context, output);
++        return output;
+     }
+ 
+-    private void SendPacket(object? state)
++    public void ExportKeyingMaterial(ReadOnlySpan<byte> label, ReadOnlySpan<byte> context, Span<byte> output)
+     {
+-        SendScheduleInfo info = (SendScheduleInfo)state!;
+-        lock (info)
++        unsafe
+         {
+-            int bytesSent = 0;
+-            while (bytesSent < info.SendBufferData.Length)
++            lock (this)
+             {
+-                bytesSent += socket.SendTo(
+-                    info.SendBufferData[bytesSent..], 
+-                    remoteEndPoint
+-                    );
++                ObjectDisposedException.ThrowIf(NativePtr is null, this);
++
++                fixed (byte* labelPtr = label)
++                fixed (byte* contextPtr = context)
++                fixed (byte* outputPtr = output)
++                {
++                    QuicheException.ThrowIfError((QuicheError)NativePtr->ExportKeyingMaterial(
++                        labelPtr, (nuint)label.Length,
++                        contextPtr, (nuint)context.Length,
++                        outputPtr, (nuint)output.Length),
++                        "Failed to export keying material for this connection.");
++                }
+             }
+         }
+     }
+ 
+-    private async Task SendAsync(CancellationToken cancellationToken)
++    private void EmitPackets()
+     {
+-        byte[] packetBuf = new byte[QuicheLibrary.MAX_DATAGRAM_LEN];
++        CancellationToken cancellationToken = cts.Token;
++        SpinWait spinner = default;
++
++        try
++        {
++            while (!cancellationToken.IsCancellationRequested)
++            {
++                if (!packetQueue.TryPeek(out OutgoingPacket packet))
++                {
++                    packetSignal.Wait(MAX_IDLE_WAIT, cancellationToken);
++                    continue;
++                }
++
++                // A release time of 0 means "now" (platforms without timestamps).
++                long delayNs = packet.AtNs - GetTimestampNs() - PACING_TOLERANCE_NS;
++                if (packet.AtNs != 0 && delayNs > 0)
++                {
++                    if (delayNs > PACING_SLEEP_THRESHOLD_NS)
++                    {
++                        Thread.Sleep(1);
++                    }
++                    else
++                    {
++                        spinner.SpinOnce(sleep1Threshold: -1);
++                    }
++                    continue;
++                }
+ 
+-        SendScheduleInfo info = new SendScheduleInfo();
+-        using Timer timer = new Timer(SendPacket, info, Timeout.Infinite, Timeout.Infinite);
++                spinner.Reset();
++                packetQueue.TryDequeue(out _);
+ 
+-        while (!cancellationToken.IsCancellationRequested)
++                try
++                {
++                    socket.SendTo(packet.Data, remoteEndPoint);
++                }
++                catch (SocketException)
++                {
++                    // Behaves like packet loss, which QUIC recovers from.
++                }
++            }
++        }
++        catch (OperationCanceledException) { }
++        catch (ObjectDisposedException) { }
++    }
++
++    // Native calls taking pointers to locals live in synchronous methods: locals
++    // of async methods can be hoisted to the heap and moved by the GC.
++
++    private unsafe int GeneratePackets(byte[] packetBuf, out ulong timeoutNs)
++    {
++        int packetCount = 0;
++        lock (this)
+         {
+-            cancellationToken.ThrowIfCancellationRequested();
+-            if (IsClosed)
++            if (NativePtr is null || NativePtr->IsClosed())
+             {
++                OnClosed();
+                 throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+             }
+ 
+-            try
++            if (NativePtr->TimeoutAsNanos() == 0)
+             {
+-                long resultOrError;
+-                quiche_send_info sendInfo = default;
+-                unsafe
++                NativePtr->OnTimeout();
++            }
++
++            fixed (byte* pktPtr = packetBuf)
++            {
++                while (packetCount < MAX_PACKETS_PER_BATCH)
+                 {
+-                    lock (this)
++                    quiche_send_info sendInfo = default;
++                    long resultOrError = (long)NativePtr->Send(
++                        pktPtr, (nuint)packetBuf.Length, &sendInfo);
++
++                    if (resultOrError == (long)QuicheError.QUICHE_ERR_DONE)
+                     {
+-                        fixed (byte* pktPtr = packetBuf)
+-                        {
+-                            resultOrError = (long)NativePtr->Send(
+-                                pktPtr, (nuint)packetBuf.Length,
+-                                (quiche_send_info*)Unsafe.AsPointer(ref sendInfo)
+-                                );
+-                        }
++                        break;
+                     }
++
++                    QuicheException.ThrowIfError((QuicheError)resultOrError);
++
++                    long atNs = sendInfo.at.tv_sec * 1_000_000_000L + (long)sendInfo.at.tv_nsec.Value;
++                    packetQueue.Enqueue(new(packetBuf.AsSpan(0, (int)resultOrError).ToArray(), atNs));
++                    packetCount++;
+                 }
++            }
+ 
+-                QuicheException.ThrowIfError((QuicheError)resultOrError);
+-                info.Update(packetBuf.AsSpan(0, (int)resultOrError));
++            timeoutNs = NativePtr->TimeoutAsNanos();
++        }
++
++        return packetCount;
++    }
+ 
+-                timer.Change(
+-                    TimeSpan.FromSeconds(Unsafe.As<timespec, CLong>
+-                        (ref sendInfo.at).Value) +
+-                    TimeSpan.FromTicks(sendInfo.at.tv_nsec.Value / 100),
+-                    Timeout.InfiniteTimeSpan
+-                    );
++    private unsafe long ProcessPacket(ReadOnlyMemory<byte> packet, byte[] packetBuf, out bool isConnEstablished)
++    {
++        lock (this)
++        {
++            if (NativePtr is null || NativePtr->IsClosed())
++            {
++                OnClosed();
++                throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+             }
+-            catch (QuicheException ex)
+-            when (ex.ErrorCode == QuicheError.QUICHE_ERR_DONE)
++
++            packet.CopyTo(packetBuf);
++
++            var (to, to_len) = GetSocketAddress(socket.LocalEndPoint);
++            var (from, from_len) = GetSocketAddress(remoteEndPoint);
++
++            long resultOrError;
++            using (to)
++            using (from)
+             {
+-                if (IsClosed) { throw; }
+-                await Task.Delay(75, cancellationToken);
+-                continue;
++                quiche_recv_info recvInfo = new quiche_recv_info
++                {
++                    to = (sockaddr*)to.Pointer,
++                    to_len = (size_t)to_len,
++
++                    from = (sockaddr*)from.Pointer,
++                    from_len = (size_t)from_len,
++                };
++
++                fixed (byte* bufPtr = packetBuf)
++                {
++                    resultOrError = (long)NativePtr->Recv(
++                        bufPtr, (nuint)packet.Length, &recvInfo);
++                }
++            }
++
++            isConnEstablished = NativePtr->IsEstablished();
++            return resultOrError;
++        }
++    }
++
++    private unsafe long StreamSendChunk(ulong streamId, byte[] streamBuf, long offset, bool fin)
++    {
++        lock (this)
++        {
++            ulong errorCode = 0;
++            fixed (byte* bufPtr = streamBuf)
++            {
++                return (long)NativePtr->StreamSend(streamId,
++                    bufPtr + offset, (nuint)(streamBuf.Length - offset),
++                    fin, &errorCode);
++            }
++        }
++    }
++
++    private unsafe long StreamRecvChunk(ulong streamId, byte[] streamBuf, out bool streamFinished)
++    {
++        lock (this)
++        {
++            bool finished = false;
++            ulong errorCode = 0;
++            long recvCount;
++            fixed (byte* bufPtr = streamBuf)
++            {
++                recvCount = (long)NativePtr->StreamRecv(streamId, bufPtr, (nuint)streamBuf.Length,
++                    &finished, &errorCode);
++            }
++
++            streamFinished = finished;
++            return recvCount;
++        }
++    }
++
++    private async Task SendAsync(CancellationToken cancellationToken)
++    {
++        byte[] packetBuf = new byte[QuicheLibrary.MAX_DATAGRAM_LEN];
++
++        while (!cancellationToken.IsCancellationRequested)
++        {
++            cancellationToken.ThrowIfCancellationRequested();
++
++            Task signal = sendSignal.Task;
++            try
++            {
++                int packetCount = GeneratePackets(packetBuf, out ulong timeoutNs);
++
++                if (packetCount > 0)
++                {
++                    packetSignal.Release();
++                    sentSignal.Set();
++                    continue;
++                }
++
++                TimeSpan wait = timeoutNs >= (ulong)MAX_IDLE_WAIT.Ticks * 100 ?
++                    MAX_IDLE_WAIT : TimeSpan.FromTicks((long)(timeoutNs / 100));
++                await WaitAsync(signal, wait, cancellationToken);
+             }
+             catch (QuicheException ex)
+             {
+@@ -301,7 +685,7 @@ public class QuicheConnection : IDisposable
+ 
+     private async Task SendDatagramsAsync(CancellationToken cancellationToken)
+     {
+-        byte[] dgramBuf;
++        byte[] dgramBuf = [];
+         bool waitFlag = false;
+         while (!cancellationToken.IsCancellationRequested)
+         {
+@@ -311,9 +695,10 @@ public class QuicheConnection : IDisposable
+                 throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+             }
+ 
++            Task signal = sentSignal.Task;
+             if (waitFlag)
+             {
+-                await Task.Delay(75, cancellationToken);
++                await WaitAsync(signal, MAX_IDLE_WAIT, cancellationToken);
+             }
+             else
+             {
+@@ -333,15 +718,53 @@ public class QuicheConnection : IDisposable
+                         waitFlag = false;
+                         fixed (byte* bufPtr = dgramBuf)
+                         {
+-                            QuicheError errorCode = (QuicheError)NativePtr->DgramSend(bufPtr, (size_t)dgramBuf.Length);
++                            QuicheError errorCode = (QuicheError)(long)NativePtr->DgramSend(bufPtr, (size_t)dgramBuf.Length);
+                             QuicheException.ThrowIfError(errorCode);
+                         }
+                     }
+                 }
+             }
++
++            if (!waitFlag)
++            {
++                sendSignal.Set();
++            }
+         }
+     }
+ 
++    // Streams whose FIN was sent (or can no longer be sent).
++    private readonly ConcurrentDictionary<ulong, bool> finishedStreams = new();
++
++    // Non-empty buffer so the pointer passed with a zero length is never null.
++    private static readonly byte[] FIN_BUF = new byte[1];
++
++    // Sends the FIN of a stream the application finished writing to, once all
++    // of its data was handed to quiche. Only called from SendStreamAsync.
++    private bool TrySendFin(ulong streamId, QuicheStream stream)
++    {
++        if (!stream.CanWrite || !stream.IsWriteCompleted || finishedStreams.ContainsKey(streamId))
++        {
++            return false;
++        }
++
++        if (sendQueue.TryGetValue(streamId, out byte[]? pending) && pending.Length > 0)
++        {
++            return false;
++        }
++
++        long resultOrError = StreamSendChunk(streamId, FIN_BUF, FIN_BUF.Length, true);
++        if (resultOrError == (long)QuicheError.QUICHE_ERR_DONE)
++        {
++            // No capacity yet, retry later.
++            return false;
++        }
++
++        // Sent, or the stream was stopped or reset by the peer.
++        finishedStreams.TryAdd(streamId, true);
++        sendQueue.TryRemove(streamId, out _);
++        return resultOrError >= 0;
++    }
++
+     private async Task SendStreamAsync(CancellationToken cancellationToken)
+     {
+         while (!cancellationToken.IsCancellationRequested)
+@@ -352,9 +775,12 @@ public class QuicheConnection : IDisposable
+                 throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+             }
+ 
++            Task signal = Task.WhenAny(streamWriteSignal.Task, recvSignal.Task);
++
+             ulong streamId;
+             QuicheStream? stream;
+             ulong? streamIdOrNull = sendQueue
++                .Where(x => x.Value.Length > 0)
+                 .OrderByDescending(x => x.Value.Length)
+                 .Select(x => x.Key)
+                 .Cast<ulong?>()
+@@ -377,12 +803,29 @@ public class QuicheConnection : IDisposable
+ 
+                 if (stream is null || (!isConnectionEstablished && !isInEarlyData))
+                 {
+-                    foreach (var str in streamMap.Values)
++                    bool flushed = false, finSent = false;
++                    foreach (var (id, str) in streamMap)
+                     {
+                         str.Flush();
++                        flushed = true;
++
++                        if (isConnectionEstablished || isInEarlyData)
++                        {
++                            finSent |= TrySendFin(id, str);
++                        }
+                     }
+ 
+-                    await Task.Delay(75, cancellationToken);
++                    if (finSent)
++                    {
++                        sendSignal.Set();
++                    }
++
++                    // Only loop right away if flushing produced data that can be sent.
++                    bool hasData = flushed && sendQueue.Any(x => x.Value.Length > 0);
++                    if (!hasData || (!isConnectionEstablished && !isInEarlyData))
++                    {
++                        await WaitAsync(signal, MAX_IDLE_WAIT, cancellationToken);
++                    }
+                     continue;
+                 }
+ 
+@@ -390,37 +833,34 @@ public class QuicheConnection : IDisposable
+                 {
+                     stream.Flush();
+ 
+-                    await Task.Delay(75, cancellationToken);
++                    await WaitAsync(signal, MAX_IDLE_WAIT, cancellationToken);
+                     continue;
+                 }
+ 
+-                long resultOrError, errorCode, bytesSent = 0;
+-                Lazy<bool> hasNotSentAllBytes;
++                long resultOrError, bytesSent = 0;
+                 do
+                 {
+-                    unsafe
+-                    {
+-                        lock (this)
+-                        {
+-                            fixed (byte* bufPtr = streamBuf)
+-                            {
+-                                errorCode = (long)QuicheError.QUICHE_ERR_NONE;
+-                                resultOrError = (long)NativePtr->StreamSend(streamId,
+-                                    bufPtr + bytesSent, (nuint)(streamBuf.Length - bytesSent),
+-                                    bytesSent == streamBuf.Length && stream.IsShuttingDown,
+-                                    (ulong*)Unsafe.AsPointer(ref errorCode)
+-                                    );
+-                            }
+-                        }
+-                    }
++                    resultOrError = StreamSendChunk(streamId, streamBuf, bytesSent, false);
++                } while (resultOrError >= 0 && (bytesSent += resultOrError) < streamBuf.Length);
++
++                // Keep unsent bytes in front of anything flushed meanwhile.
++                if (bytesSent < streamBuf.Length)
++                {
++                    sendQueue.AddOrUpdate(streamId,
++                        key => streamBuf[(int)bytesSent..],
++                        (key, buf) => [.. streamBuf[(int)bytesSent..], .. buf]
++                        );
++                }
+ 
+-                    hasNotSentAllBytes = new(() => (bytesSent += resultOrError) < streamBuf.Length);
+-                } while (resultOrError >= 0 && hasNotSentAllBytes.Value);
++                if (bytesSent == streamBuf.Length)
++                {
++                    TrySendFin(streamId, stream);
++                }
+ 
+-                sendQueue.AddOrUpdate(streamId,
+-                    key => streamBuf[(int)bytesSent..],
+-                    (key, buf) => [.. buf, .. streamBuf[(int)bytesSent..]]
+-                    );
++                if (bytesSent > 0)
++                {
++                    sendSignal.Set();
++                }
+ 
+                 QuicheException.ThrowIfError((QuicheError)resultOrError);
+             }
+@@ -428,7 +868,7 @@ public class QuicheConnection : IDisposable
+             when (ex.ErrorCode == QuicheError.QUICHE_ERR_DONE)
+             {
+                 if (IsClosed) { throw; }
+-                await Task.Delay(75, cancellationToken);
++                await WaitAsync(signal, MAX_IDLE_WAIT, cancellationToken);
+                 continue;
+             }
+             catch (QuicheException ex)
+@@ -446,81 +886,42 @@ public class QuicheConnection : IDisposable
+ 
+     private async Task ReceiveAsync(CancellationToken cancellationToken)
+     {
+-        byte[] packetBuf = new byte[QuicheLibrary.MAX_DATAGRAM_LEN];
++        byte[] packetBuf = new byte[QuicheLibrary.MAX_BUFFER_LEN];
+         while (!cancellationToken.IsCancellationRequested)
+         {
+             cancellationToken.ThrowIfCancellationRequested();
+-            if (IsClosed)
+-            {
+-                throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+-            }
+ 
+             try
+             {
+-                bool isConnEstablished, isInEarlyData;
+-                unsafe
++                ReadOnlyMemory<byte> nextPacket;
++                try
+                 {
+-                    lock (this)
+-                    {
+-                        NativePtr->OnTimeout();
+-
+-                        isConnEstablished = NativePtr->IsEstablished();
+-                        isInEarlyData = NativePtr->IsInEarlyData();
+-                    }
++                    nextPacket = await recvChannel.Reader.ReadAsync(cancellationToken);
+                 }
+-
+-                if (isConnEstablished)
++                catch (ChannelClosedException)
+                 {
+-                    establishedTcs.TrySetResult();
++                    throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+                 }
+ 
+-                ReadOnlyMemory<byte> nextPacket;
+-                if (!recvQueue.TryDequeue(out nextPacket) && !IsClosed)
++                if (nextPacket.Length > packetBuf.Length)
+                 {
+-                    await Task.Delay(75, cancellationToken);
+                     continue;
+                 }
+-                else if (IsClosed)
+-                {
+-                    throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+-                }
+-                else
++
++                long resultOrError = ProcessPacket(nextPacket, packetBuf, out bool isConnEstablished);
++
++                if (resultOrError != (long)QuicheError.QUICHE_ERR_DONE)
+                 {
+-                    nextPacket.CopyTo(packetBuf);
++                    QuicheException.ThrowIfError((QuicheError)resultOrError);
+                 }
+ 
+-                long resultOrError;
+-                unsafe
++                if (isConnEstablished)
+                 {
+-                    lock (this)
+-                    {
+-                        var (to, to_len) = GetSocketAddress(socket.LocalEndPoint);
+-                        var (from, from_len) = GetSocketAddress(remoteEndPoint);
+-
+-                        quiche_recv_info recvInfo = new quiche_recv_info
+-                        {
+-                            to = (sockaddr*)to.Pointer,
+-                            to_len = (size_t)to_len,
+-
+-                            from = (sockaddr*)from.Pointer,
+-                            from_len = (size_t)from_len,
+-                        };
+-
+-                        using (to)
+-                        using (from)
+-                        {
+-                            fixed (byte* bufPtr = packetBuf)
+-                            {
+-                                resultOrError = (long)NativePtr->Recv(
+-                                    bufPtr, (nuint)nextPacket.Length,
+-                                    (quiche_recv_info*)Unsafe.AsPointer(ref recvInfo)
+-                                    );
+-                            }
+-                        }
+-                    }
++                    establishedTcs.TrySetResult();
+                 }
+ 
+-                QuicheException.ThrowIfError((QuicheError)resultOrError);
++                recvSignal.Set();
++                sendSignal.Set();
+             }
+             catch (QuicheException ex)
+             {
+@@ -546,6 +947,7 @@ public class QuicheConnection : IDisposable
+                 throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+             }
+ 
++            Task signal = recvSignal.Task;
+             unsafe
+             {
+                 lock (this)
+@@ -560,7 +962,7 @@ public class QuicheConnection : IDisposable
+                         dgramBuf = new byte[dgramBufLen];
+                         fixed (byte* bufPtr = dgramBuf)
+                         {
+-                            QuicheError errorCode = (QuicheError)NativePtr->DgramRecv(bufPtr, (size_t)dgramBuf.Length);
++                            QuicheError errorCode = (QuicheError)(long)NativePtr->DgramRecv(bufPtr, (size_t)dgramBuf.Length);
+                             QuicheException.ThrowIfError(errorCode);
+                         }
+                     }
+@@ -569,7 +971,7 @@ public class QuicheConnection : IDisposable
+ 
+             if (dgramBuf is null)
+             {
+-                await Task.Delay(75, cancellationToken);
++                await WaitAsync(signal, MAX_IDLE_WAIT, cancellationToken);
+             }
+             else
+             {
+@@ -589,6 +991,8 @@ public class QuicheConnection : IDisposable
+                 throw new QuicheException(QuicheError.QUICHE_ERR_DONE, "Connection was closed.");
+             }
+ 
++            Task signal = recvSignal.Task;
++
+             long streamIdOrNone;
+             bool isConnEstablished, isInEarlyData;
+             unsafe
+@@ -611,7 +1015,7 @@ public class QuicheConnection : IDisposable
+             }
+             else
+             {
+-                await Task.Delay(75, cancellationToken);
++                await WaitAsync(signal, MAX_IDLE_WAIT, cancellationToken);
+                 continue;
+             }
+ 
+@@ -621,22 +1025,13 @@ public class QuicheConnection : IDisposable
+                 long recvCount = long.MaxValue;
+                 while (!streamFinished && recvCount > 0)
+                 {
+-                    long errorCode;
+-                    unsafe
+-                    {
+-                        lock (this)
+-                        {
+-                            fixed (byte* bufPtr = streamBuf)
+-                            {
+-                                errorCode = (long)QuicheError.QUICHE_ERR_NONE;
+-                                recvCount = (long)NativePtr->StreamRecv(streamId, bufPtr, (nuint)streamBuf.Length,
+-                                    (bool*)Unsafe.AsPointer(ref streamFinished), (ulong*)Unsafe.AsPointer(ref errorCode));
+-                            }
+-                        }
+-                    }
++                    recvCount = StreamRecvChunk(streamId, streamBuf, out streamFinished);
+ 
+                     if (recvCount > 0)
+                     {
++                        // Reading frees flow control credit.
++                        sendSignal.Set();
++
+                         await stream.ReceiveDataAsync(
+                             streamBuf.AsMemory(0, (int)recvCount),
+                             streamFinished, cancellationToken
+@@ -652,7 +1047,7 @@ public class QuicheConnection : IDisposable
+                 when (ex.ErrorCode == QuicheError.QUICHE_ERR_DONE)
+             {
+                 if (IsClosed) { throw; }
+-                await Task.Delay(75, cancellationToken);
++                await WaitAsync(signal, MAX_IDLE_WAIT, cancellationToken);
+                 continue;
+             }
+             catch (QuicheException ex)
+@@ -677,7 +1072,7 @@ public class QuicheConnection : IDisposable
+             byte[] packetBuf = new byte[QuicheLibrary.MAX_DATAGRAM_LEN];
+             SocketReceiveFromResult result = await socket.ReceiveFromAsync(
+                 packetBuf, remoteEndPoint, cancellationToken);
+-            recvQueue.Enqueue(packetBuf.AsMemory(0, result.ReceivedBytes));
++            EnqueueReceivedPacket(packetBuf.AsMemory(0, result.ReceivedBytes));
+         }
+     }
+ 
+@@ -830,6 +1225,8 @@ public class QuicheConnection : IDisposable
+                     }
+                 }
+ 
++                sendSignal.Set();
++
+                 Task.WaitAll(recvTask, sendTask, recvStreamTask, sendStreamTask);
+             }
+             catch (AggregateException ex)
+@@ -844,10 +1241,12 @@ public class QuicheConnection : IDisposable
+             finally
+             {
+                 cts.Cancel();
++                emitThread.Join(TimeSpan.FromSeconds(1));
+                 cts.Dispose();
+ 
+-                recvQueue.Clear();
++                recvChannel.Writer.TryComplete();
+                 sendQueue.Clear();
++                packetQueue.Clear();
+ 
+                 streamMap.Clear();
+                 streamChannel.Writer.Complete();
+diff --git a/Cloudflare.QuicheNet/QuicheListener.cs b/Cloudflare.QuicheNet/QuicheListener.cs
+index 501a688..903fedb 100644
+--- a/Cloudflare.QuicheNet/QuicheListener.cs
++++ b/Cloudflare.QuicheNet/QuicheListener.cs
+@@ -35,7 +35,7 @@ public class QuicheListener : IDisposable
+ 
+             if (connMap.TryGetValue(recvResult.RemoteEndPoint, out QuicheConnection? connection))
+             {
+-                connection.recvQueue.Enqueue(receivedBytes);
++                connection.EnqueueReceivedPacket(receivedBytes);
+             }
+             else
+             {
+diff --git a/Cloudflare.QuicheNet/QuicheStream.cs b/Cloudflare.QuicheNet/QuicheStream.cs
+index eaab250..1afc564 100644
+--- a/Cloudflare.QuicheNet/QuicheStream.cs
++++ b/Cloudflare.QuicheNet/QuicheStream.cs
+@@ -1,4 +1,4 @@
+-﻿using System.Buffers;
++using System.Buffers;
+ using System.IO.Pipelines;
+ 
+ namespace Cloudflare.QuicheNet
+@@ -41,6 +41,10 @@ namespace Cloudflare.QuicheNet
+ 
+         internal bool IsShuttingDown => disposedValue;
+ 
++        // Set once all written data was handed to the connection after disposal,
++        // so the FIN can't be sent before the last bytes.
++        internal bool IsWriteCompleted { get; private set; }
++
+         internal QuicheStream(QuicheConnection conn, ulong streamId)
+         {
+             this.conn = conn;
+@@ -82,62 +86,81 @@ namespace Cloudflare.QuicheNet
+ 
+         public override void Flush()
+         {
+-            while (sendPipe is not null && sendPipe.Reader.TryRead(out ReadResult result))
++            if (sendPipe is null)
+             {
+-                conn.sendQueue.AddOrUpdate(streamId,
+-                    key => result.Buffer.ToArray(),
+-                    (key, buf) => [.. buf, .. result.Buffer.ToArray()]
+-                    );
+-                sendPipe.Reader.AdvanceTo(result.Buffer.End);
+-                if (result.IsCompleted) break;
++                return;
+             }
+-        }
+ 
+-        public override int Read(byte[] buffer, int offset, int count)
+-        {
+-            if (recvPipe is not null)
++            // Called both by the application and by the connection's send loop;
++            // PipeReader doesn't support concurrent readers.
++            lock (sendPipe)
+             {
+-                int bytesTotal = 0;
+-                while (bytesTotal < count)
++                while (sendPipe.Reader.TryRead(out ReadResult result))
+                 {
+-                    if (recvPipe.Reader.TryRead(out ReadResult result))
++                    if (!result.Buffer.IsEmpty)
+                     {
+-                        int bytesRead = (int)Math.Min(result.Buffer.Length, count - bytesTotal);
+-
+-                        result.Buffer.Slice(result.Buffer.Start, bytesRead).CopyTo(buffer.AsSpan(offset + bytesTotal, bytesRead));
+-                        recvPipe.Reader.AdvanceTo(result.Buffer.GetPosition(bytesRead));
+-
+-                        bytesTotal += bytesRead;
+-                        if (result.IsCompleted) break;
+-                    }
+-                    else
+-                    {
+-                        break;
++                        conn.sendQueue.AddOrUpdate(streamId,
++                            key => result.Buffer.ToArray(),
++                            (key, buf) => [.. buf, .. result.Buffer.ToArray()]
++                            );
+                     }
++                    sendPipe.Reader.AdvanceTo(result.Buffer.End);
++                    if (result.IsCompleted || result.Buffer.IsEmpty) break;
+                 }
+-
+-                return bytesTotal;
+             }
+-            else
++        }
++
++        // Blocks until data is available; returns 0 only at the end of the stream.
++        public override int Read(byte[] buffer, int offset, int count)
++        {
++            return ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
++        }
++
++        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
++        {
++            return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
++        }
++
++        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
++        {
++            if (recvPipe is null)
+             {
+                 throw new NotSupportedException("This stream is not readable.");
+             }
++
++            if (buffer.IsEmpty)
++            {
++                return 0;
++            }
++
++            ReadResult result = await recvPipe.Reader.ReadAsync(cancellationToken);
++
++            int bytesRead = (int)Math.Min(result.Buffer.Length, buffer.Length);
++            result.Buffer.Slice(0, bytesRead).CopyTo(buffer.Span);
++            recvPipe.Reader.AdvanceTo(result.Buffer.GetPosition(bytesRead));
++
++            return bytesRead;
+         }
+ 
+-        public override async void Write(byte[] buffer, int offset, int count)
++        public override void Write(byte[] buffer, int offset, int count)
+         {
+-            if (sendPipe is not null)
+-            {
+-                Memory<byte> memory = sendPipe.Writer.GetMemory(count);
+-                buffer.AsMemory(offset, count).CopyTo(memory);
+-                sendPipe.Writer.Advance(count);
++            WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
++        }
+ 
+-                await sendPipe.Writer.FlushAsync();
+-            }
+-            else
++        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
++        {
++            return WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
++        }
++
++        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
++        {
++            if (sendPipe is null)
+             {
+                 throw new NotSupportedException("This stream is not writable.");
+             }
++
++            await sendPipe.Writer.WriteAsync(buffer, cancellationToken);
++            conn.NotifyStreamWrite();
+         }
+ 
+         public override long Seek(long offset, SeekOrigin origin) =>
+@@ -165,6 +188,8 @@ namespace Cloudflare.QuicheNet
+                     }
+ 
+                     Flush();
++                    IsWriteCompleted = true;
++                    conn.NotifyStreamWrite();
+                 }
+             }
+ 
+diff --git a/quiche-bindgen/include/quiche.h b/quiche-bindgen/include/quiche.h
+index 9b3391d..b82aa99 100644
+--- a/quiche-bindgen/include/quiche.h
++++ b/quiche-bindgen/include/quiche.h
+@@ -45,7 +45,9 @@
+ #endif
+ #ifdef _MSC_VER
+ #include <BaseTsd.h>
+-#define ssize_t SSIZE_T
++// intptr_t (instead of SSIZE_T) makes bindgen emit isize, so the generated C#
++// bindings use nint and are the same for x86 and x64.
++#define ssize_t intptr_t
+ #endif
+ 
+ #if defined(__cplusplus)

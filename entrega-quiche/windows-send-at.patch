@@ -1,0 +1,125 @@
+diff --git a/quiche/quiche/src/ffi.rs b/quiche/quiche/src/ffi.rs
+index 3306b618..499fb8df 100644
+--- a/quiche/quiche/src/ffi.rs
++++ b/quiche/quiche/src/ffi.rs
+@@ -2161,17 +2161,119 @@ fn std_time_to_c(time: &Instant, out: &mut timespec) {
+     out.tv_nsec = raw_time.subsec_nanos() as libc::c_long;
+ }
+ 
+-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ fn std_time_to_c(_time: &Instant, out: &mut timespec) {
+     // TODO: implement Instant conversion for systems that don't use timespec.
+     out.tv_sec = 0;
+     out.tv_nsec = 0;
+ }
+ 
++/// Returns the current value of QueryPerformanceCounter, in nanoseconds.
++#[cfg(target_os = "windows")]
++fn performance_counter_nanos() -> u128 {
++    #[link(name = "kernel32")]
++    extern "system" {
++        fn QueryPerformanceCounter(count: *mut i64) -> i32;
++        fn QueryPerformanceFrequency(frequency: *mut i64) -> i32;
++    }
++
++    let mut count = 0;
++    let mut frequency = 0;
++
++    // These can't fail on Windows XP or later.
++    unsafe {
++        QueryPerformanceCounter(&mut count);
++        QueryPerformanceFrequency(&mut frequency);
++    }
++
++    let count = count.max(0) as u128;
++    let frequency = frequency.max(1) as u128;
++
++    count / frequency * 1_000_000_000 +
++        count % frequency * 1_000_000_000 / frequency
++}
++
++// Instant has no accessible epoch on Windows, so the time is expressed in the
++// QueryPerformanceCounter domain, the clock backing Instant, which other
++// runtimes can read as well (e.g. .NET's Stopwatch).
++#[cfg(target_os = "windows")]
++fn std_time_to_c(time: &Instant, out: &mut timespec) {
++    let now = Instant::now();
++    let now_nanos = performance_counter_nanos();
++
++    let nanos = if *time >= now {
++        now_nanos + time.duration_since(now).as_nanos()
++    } else {
++        now_nanos.saturating_sub(now.duration_since(*time).as_nanos())
++    };
++
++    out.tv_sec = (nanos / 1_000_000_000) as libc::time_t;
++    out.tv_nsec = (nanos % 1_000_000_000) as libc::c_long;
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
++    #[cfg(target_os = "windows")]
++    fn timespec_nanos(t: &timespec) -> u128 {
++        t.tv_sec as u128 * 1_000_000_000 + t.tv_nsec as u128
++    }
++
++    #[cfg(target_os = "windows")]
++    #[test]
++    fn time_to_c_windows() {
++        let now = Instant::now();
++        let delta = std::time::Duration::from_millis(5);
++
++        let mut out: timespec = unsafe { std::mem::zeroed() };
++
++        let before = performance_counter_nanos();
++        std_time_to_c(&now, &mut out);
++        let after = performance_counter_nanos();
++
++        let now_nanos = timespec_nanos(&out);
++        assert!(now_nanos > 0);
++        assert!(now_nanos <= after);
++        assert!(now_nanos + 1_000_000 >= before);
++
++        std_time_to_c(&(now + delta), &mut out);
++        let later_nanos = timespec_nanos(&out);
++        assert!(later_nanos.abs_diff(now_nanos + delta.as_nanos()) < 1_000_000);
++
++        std_time_to_c(&(now - delta), &mut out);
++        let earlier_nanos = timespec_nanos(&out);
++        assert!(earlier_nanos.abs_diff(now_nanos - delta.as_nanos()) < 1_000_000);
++    }
++
++    #[cfg(target_os = "windows")]
++    #[test]
++    fn send_info_at_windows() {
++        let mut pipe = crate::test_utils::Pipe::new("cubic").unwrap();
++        assert_eq!(pipe.handshake(), Ok(()));
++        assert_eq!(pipe.client.stream_send(0, b"hello", true), Ok(5));
++
++        let mut buf = [0; 1500];
++        let mut info: SendInfo = unsafe { std::mem::zeroed() };
++
++        let before = performance_counter_nanos();
++        let written = quiche_conn_send(
++            &mut pipe.client,
++            buf.as_mut_ptr(),
++            buf.len(),
++            &mut info,
++        );
++        let after = performance_counter_nanos();
++
++        assert!(written > 0);
++
++        // The release time is in the QueryPerformanceCounter domain, and at
++        // most slightly in the future because of pacing.
++        let at = timespec_nanos(&info.at);
++        assert!(at + 1_000_000 >= before);
++        assert!(at <= after + 100_000_000);
++    }
++
+     use libc::c_void;
+     #[cfg(windows)]
+     use windows_sys::Win32::Networking::WinSock::inet_ntop;

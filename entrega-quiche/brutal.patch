@@ -1,0 +1,1318 @@
+diff --git a/quiche/quiche/include/quiche.h b/quiche/quiche/include/quiche.h
+index 3afa20e2..89e0e216 100644
+--- a/quiche/quiche/include/quiche.h
++++ b/quiche/quiche/include/quiche.h
+@@ -238,6 +238,7 @@ enum quiche_cc_algorithm {
+     QUICHE_CC_RENO = 0,
+     QUICHE_CC_CUBIC = 1,
+     QUICHE_CC_BBR2_GCONGESTION = 4,
++    QUICHE_CC_BRUTAL = 5,
+ };
+ 
+ // Sets the congestion control algorithm used.
+@@ -361,6 +362,11 @@ int quiche_conn_set_session(quiche_conn *conn, const uint8_t *buf, size_t buf_le
+ // no timeout.
+ int quiche_conn_set_max_idle_timeout(quiche_conn *conn, uint64_t v);
+ 
++// Sets the send rate of the Brutal congestion control algorithm, in bytes per
++// second, on all paths. A rate of 0 falls back to BBRv2. Returns
++// QUICHE_ERR_CONGESTION_CONTROL if the algorithm is not QUICHE_CC_BRUTAL.
++int quiche_conn_set_brutal_rate(quiche_conn *conn, uint64_t bytes_per_sec);
++
+ typedef struct {
+     // The remote address the packet was received from.
+     struct sockaddr *from;
+diff --git a/quiche/quiche/src/ffi.rs b/quiche/quiche/src/ffi.rs
+index 3306b618..0b6db158 100644
+--- a/quiche/quiche/src/ffi.rs
++++ b/quiche/quiche/src/ffi.rs
+@@ -822,6 +822,17 @@ pub extern "C" fn quiche_conn_set_max_idle_timeout(
+     }
+ }
+ 
++#[no_mangle]
++pub extern "C" fn quiche_conn_set_brutal_rate(
++    conn: &mut Connection, v: u64,
++) -> c_int {
++    match conn.set_brutal_rate(v) {
++        Ok(()) => 0,
++
++        Err(e) => e.to_c() as c_int,
++    }
++}
++
+ #[repr(C)]
+ pub struct RecvInfo<'a> {
+     from: &'a sockaddr,
+diff --git a/quiche/quiche/src/lib.rs b/quiche/quiche/src/lib.rs
+index d08110e6..0218f9f2 100644
+--- a/quiche/quiche/src/lib.rs
++++ b/quiche/quiche/src/lib.rs
+@@ -1356,6 +1356,9 @@ where
+     /// The configuration for recovery.
+     recovery_config: recovery::RecoveryConfig,
+ 
++    /// The send rate of the Brutal congestion controller, in bytes per second.
++    brutal_rate: u64,
++
+     /// The path manager.
+     paths: path::PathMap,
+ 
+@@ -2080,6 +2083,8 @@ impl<F: BufFactory> Connection<F> {
+ 
+             recovery_config,
+ 
++            brutal_rate: 0,
++
+             paths,
+             path_challenge_recv_max_queue_len: config
+                 .path_challenge_recv_max_queue_len,
+@@ -2433,6 +2438,37 @@ impl<F: BufFactory> Connection<F> {
+         self.encode_transport_params()
+     }
+ 
++    /// Sets the send rate of the Brutal congestion controller, in bytes per
++    /// second.
++    ///
++    /// Brutal sends at the given rate without backing off on loss, and
++    /// compensates for the measured ACK rate. A rate of 0 (the default) makes
++    /// the connection use BBRv2 instead. The rate applies to all existing
++    /// paths, as well as to paths created later.
++    ///
++    /// This can be called at any time during the connection's lifetime.
++    ///
++    /// Returns [`CongestionControl`] if the congestion control algorithm is
++    /// not [`Brutal`].
++    ///
++    /// [`CongestionControl`]: enum.Error.html#variant.CongestionControl
++    /// [`Brutal`]: enum.CongestionControlAlgorithm.html#variant.Brutal
++    pub fn set_brutal_rate(&mut self, bytes_per_sec: u64) -> Result<()> {
++        if self.recovery_config.cc_algorithm !=
++            CongestionControlAlgorithm::Brutal
++        {
++            return Err(Error::CongestionControl);
++        }
++
++        self.brutal_rate = bytes_per_sec;
++
++        for (_, p) in self.paths.iter_mut() {
++            p.recovery.set_brutal_rate(bytes_per_sec)?;
++        }
++
++        Ok(())
++    }
++
+     /// Sets the congestion control algorithm used.
+     ///
+     /// This function can only be called inside one of BoringSSL's handshake
+@@ -8027,6 +8063,12 @@ impl<F: BufFactory> Connection<F> {
+                         if let Ok(path) = self.paths.get_active_mut() {
+                             self.recovery_config = ex_data.recovery_config;
+                             path.reinit_recovery(&self.recovery_config);
++
++                            if self.brutal_rate > 0 {
++                                path.recovery
++                                    .set_brutal_rate(self.brutal_rate)
++                                    .ok();
++                            }
+                         }
+                     }
+ 
+@@ -9028,6 +9070,10 @@ impl<F: BufFactory> Connection<F> {
+         path.max_send_bytes = buf_len * self.max_amplification_factor;
+         path.active_scid_seq = Some(in_scid_seq);
+ 
++        if self.brutal_rate > 0 {
++            path.recovery.set_brutal_rate(self.brutal_rate).ok();
++        }
++
+         // Automatically probes the new path.
+         path.request_validation();
+ 
+@@ -9177,6 +9223,10 @@ impl<F: BufFactory> Connection<F> {
+         );
+         path.active_dcid_seq = Some(dcid_seq);
+ 
++        if self.brutal_rate > 0 {
++            path.recovery.set_brutal_rate(self.brutal_rate).ok();
++        }
++
+         let pid = self
+             .paths
+             .insert_path(path, false)
+diff --git a/quiche/quiche/src/recovery/congestion/mod.rs b/quiche/quiche/src/recovery/congestion/mod.rs
+index 8161d2b7..28d4ce3d 100644
+--- a/quiche/quiche/src/recovery/congestion/mod.rs
++++ b/quiche/quiche/src/recovery/congestion/mod.rs
+@@ -288,11 +288,12 @@ impl From<CongestionControlAlgorithm> for &'static CongestionControlOps {
+         match algo {
+             CongestionControlAlgorithm::Reno => &reno::RENO,
+             CongestionControlAlgorithm::CUBIC => &cubic::CUBIC,
+-            // Bbr2Gcongestion is routed to the congestion implementation in
+-            // the gcongestion directory by Recovery::new_with_config;
+-            // LegacyRecovery never gets a RecoveryConfig with the
+-            // Bbr2Gcongestion algorithm.
+-            CongestionControlAlgorithm::Bbr2Gcongestion => unreachable!(),
++            // Bbr2Gcongestion and Brutal are routed to the congestion
++            // implementation in the gcongestion directory by
++            // Recovery::new_with_config; LegacyRecovery never gets a
++            // RecoveryConfig with those algorithms.
++            CongestionControlAlgorithm::Bbr2Gcongestion |
++            CongestionControlAlgorithm::Brutal => unreachable!(),
+         }
+     }
+ }
+diff --git a/quiche/quiche/src/recovery/congestion/recovery.rs b/quiche/quiche/src/recovery/congestion/recovery.rs
+index 406a6b85..98b38616 100644
+--- a/quiche/quiche/src/recovery/congestion/recovery.rs
++++ b/quiche/quiche/src/recovery/congestion/recovery.rs
+@@ -1084,6 +1084,10 @@ impl RecoveryOps for LegacyRecovery {
+         false
+     }
+ 
++    fn set_brutal_rate(&mut self, _bytes_per_sec: u64) -> Result<()> {
++        Err(Error::CongestionControl)
++    }
++
+     fn lost_count(&self) -> usize {
+         self.congestion.lost_count
+     }
+diff --git a/quiche/quiche/src/recovery/gcongestion/brutal.rs b/quiche/quiche/src/recovery/gcongestion/brutal.rs
+new file mode 100644
+index 00000000..87d1b384
+--- /dev/null
++++ b/quiche/quiche/src/recovery/gcongestion/brutal.rs
+@@ -0,0 +1,717 @@
++// Brutal congestion control, ported from Hysteria
++// (https://github.com/apernet/hysteria, core/internal/congestion/brutal and
++// core/internal/congestion/common/pacer.go), which is distributed under the
++// MIT license.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are
++// met:
++//
++//     * Redistributions of source code must retain the above copyright notice,
++//       this list of conditions and the following disclaimer.
++//
++//     * Redistributions in binary form must reproduce the above copyright
++//       notice, this list of conditions and the following disclaimer in the
++//       documentation and/or other materials provided with the distribution.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
++// IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++// THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++// PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
++// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
++// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
++// LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
++// NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++//! Brutal congestion control.
++//!
++//! Brutal sends at a fixed rate configured by the application and never backs
++//! off on loss. Instead, it compensates for the observed ACK rate so that the
++//! goodput stays close to the configured rate. Until a rate is configured, all
++//! decisions are delegated to BBRv2.
++
++use std::time::Duration;
++use std::time::Instant;
++
++use super::bbr2::BBRv2;
++use super::Acked;
++use super::BbrParams;
++use super::CongestionControl;
++use super::Lost;
++use crate::recovery::gcongestion::Bandwidth;
++use crate::recovery::rtt::RttStats;
++use crate::recovery::RecoveryStats;
++
++/// Number of ACK rate sampling slots. Slots are indexed by seconds, so this is
++/// also the length of the sampling window in seconds.
++const PKT_INFO_SLOT_COUNT: usize = 5;
++
++/// Minimum number of acked and lost packets in the sampling window required to
++/// use the measured ACK rate.
++const MIN_SAMPLE_COUNT: u64 = 50;
++
++/// Lower bound of the ACK rate used to compensate for loss.
++const MIN_ACK_RATE: f64 = 0.8;
++
++const CONGESTION_WINDOW_MULTIPLIER: f64 = 2.0;
++
++/// Congestion window used until an RTT sample is available, in bytes.
++const NO_RTT_CONGESTION_WINDOW: usize = 10240;
++
++/// Minimum burst size, in packets.
++const MAX_BURST_PACKETS: usize = 10;
++
++/// Burst duration at the pacing rate (`maxBurstPacingDelayMultiplier` times
++/// `MinPacingDelay` in Hysteria).
++const MAX_BURST_PACING_DELAY: Duration = Duration::from_millis(4);
++
++#[derive(Clone, Copy, Debug, Default)]
++struct PktInfo {
++    timestamp: i64,
++    ack_count: u64,
++    loss_count: u64,
++}
++
++#[derive(Debug)]
++struct BrutalSender {
++    /// Configured send rate, in bytes per second.
++    bps: u64,
++
++    mss: usize,
++
++    pkt_info_slots: [PktInfo; PKT_INFO_SLOT_COUNT],
++
++    ack_rate: f64,
++
++    smoothed_rtt: Option<Duration>,
++
++    /// Reference point of the per-second slot timestamps.
++    epoch: Option<Instant>,
++}
++
++impl BrutalSender {
++    fn new(bps: u64, mss: usize, rtt_stats: &RttStats) -> Self {
++        BrutalSender {
++            bps,
++            mss,
++            pkt_info_slots: Default::default(),
++            ack_rate: 1.0,
++            smoothed_rtt: smoothed_rtt(rtt_stats),
++            epoch: None,
++        }
++    }
++
++    fn on_congestion_event(
++        &mut self, event_time: Instant, acked_packets: usize,
++        lost_packets: usize, rtt_stats: &RttStats,
++    ) {
++        if let Some(rtt) = smoothed_rtt(rtt_stats) {
++            self.smoothed_rtt = Some(rtt);
++        }
++
++        let epoch = *self.epoch.get_or_insert(event_time);
++        let current_timestamp =
++            event_time.saturating_duration_since(epoch).as_secs() as i64;
++
++        let slot = &mut self.pkt_info_slots
++            [current_timestamp as usize % PKT_INFO_SLOT_COUNT];
++
++        if slot.timestamp == current_timestamp {
++            slot.ack_count += acked_packets as u64;
++            slot.loss_count += lost_packets as u64;
++        } else {
++            // Uninitialized or too old slot, reset it.
++            *slot = PktInfo {
++                timestamp: current_timestamp,
++                ack_count: acked_packets as u64,
++                loss_count: lost_packets as u64,
++            };
++        }
++
++        self.update_ack_rate(current_timestamp);
++    }
++
++    fn update_ack_rate(&mut self, current_timestamp: i64) {
++        let min_timestamp = current_timestamp - PKT_INFO_SLOT_COUNT as i64;
++
++        let (ack_count, loss_count) = self
++            .pkt_info_slots
++            .iter()
++            .filter(|info| info.timestamp >= min_timestamp)
++            .fold((0, 0), |(ack, loss), info| {
++                (ack + info.ack_count, loss + info.loss_count)
++            });
++
++        if ack_count + loss_count < MIN_SAMPLE_COUNT {
++            self.ack_rate = 1.0;
++            return;
++        }
++
++        let rate = ack_count as f64 / (ack_count + loss_count) as f64;
++
++        self.ack_rate = rate.max(MIN_ACK_RATE);
++    }
++
++    fn congestion_window(&self) -> usize {
++        match self.smoothed_rtt {
++            Some(rtt) => {
++                let cwnd = self.bps as f64 *
++                    rtt.as_secs_f64() *
++                    CONGESTION_WINDOW_MULTIPLIER /
++                    self.ack_rate;
++
++                (cwnd as usize).max(self.mss)
++            },
++
++            None => NO_RTT_CONGESTION_WINDOW,
++        }
++    }
++
++    fn pacing_rate(&self) -> Bandwidth {
++        Bandwidth::from_bytes_per_second((self.bps as f64 / self.ack_rate) as u64)
++    }
++
++    fn max_burst_packets(&self) -> usize {
++        let burst = self
++            .pacing_rate()
++            .to_bytes_per_period(MAX_BURST_PACING_DELAY)
++            .max((MAX_BURST_PACKETS * self.mss) as u64);
++
++        burst.div_ceil(self.mss as u64) as usize
++    }
++}
++
++/// Returns the smoothed RTT, if a sample was taken.
++fn smoothed_rtt(rtt_stats: &RttStats) -> Option<Duration> {
++    if rtt_stats.has_first_rtt_sample && !rtt_stats.smoothed_rtt.is_zero() {
++        Some(rtt_stats.smoothed_rtt)
++    } else {
++        None
++    }
++}
++
++#[allow(clippy::large_enum_variant)]
++#[derive(Debug)]
++enum Mode {
++    /// No send rate is configured, BBRv2 is in charge.
++    Bbr(BBRv2),
++
++    /// A send rate is configured.
++    Brutal(BrutalSender),
++}
++
++#[derive(Debug)]
++pub(crate) struct Brutal {
++    mode: Mode,
++
++    mss: usize,
++
++    initial_congestion_window: usize,
++
++    max_congestion_window: usize,
++
++    initial_rtt: Duration,
++
++    custom_bbr_params: Option<BbrParams>,
++
++    time_sent_set_to_now: bool,
++}
++
++impl Brutal {
++    pub fn new(
++        initial_congestion_window: usize, max_congestion_window: usize,
++        max_segment_size: usize, initial_rtt: Duration,
++        custom_bbr_params: Option<&BbrParams>,
++    ) -> Self {
++        let bbr = BBRv2::new(
++            initial_congestion_window,
++            max_congestion_window,
++            max_segment_size,
++            initial_rtt,
++            custom_bbr_params,
++        );
++
++        Brutal {
++            time_sent_set_to_now: bbr.time_sent_set_to_now(),
++            mode: Mode::Bbr(bbr),
++            mss: max_segment_size,
++            initial_congestion_window,
++            max_congestion_window,
++            initial_rtt,
++            custom_bbr_params: custom_bbr_params.copied(),
++        }
++    }
++
++    pub fn time_sent_set_to_now(&self) -> bool {
++        self.time_sent_set_to_now
++    }
++
++    #[cfg(feature = "qlog")]
++    pub(crate) fn send_rate(&self) -> Option<Bandwidth> {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.send_rate(),
++            Mode::Brutal(_) => None,
++        }
++    }
++
++    #[cfg(feature = "qlog")]
++    pub(crate) fn ack_rate(&self) -> Option<Bandwidth> {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.ack_rate(),
++            Mode::Brutal(_) => None,
++        }
++    }
++
++    /// Sets the send rate, in bytes per second.
++    ///
++    /// A non-zero rate switches to Brutal and resets the ACK rate samples. A
++    /// rate of zero switches back to a new BBRv2 instance.
++    pub fn set_rate(&mut self, bytes_per_sec: u64, rtt_stats: &RttStats) {
++        if bytes_per_sec > 0 {
++            self.mode = Mode::Brutal(BrutalSender::new(
++                bytes_per_sec,
++                self.mss,
++                rtt_stats,
++            ));
++        } else if let Mode::Brutal(_) = self.mode {
++            self.mode = Mode::Bbr(BBRv2::new(
++                self.initial_congestion_window,
++                self.max_congestion_window,
++                self.mss,
++                self.initial_rtt,
++                self.custom_bbr_params.as_ref(),
++            ));
++        }
++    }
++}
++
++impl CongestionControl for Brutal {
++    #[cfg(feature = "qlog")]
++    fn state_str(&self) -> &'static str {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.state_str(),
++            Mode::Brutal(_) => "brutal",
++        }
++    }
++
++    fn get_congestion_window(&self) -> usize {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.get_congestion_window(),
++            Mode::Brutal(brutal) => brutal.congestion_window(),
++        }
++    }
++
++    fn get_congestion_window_in_packets(&self) -> usize {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.get_congestion_window_in_packets(),
++            Mode::Brutal(brutal) => brutal.congestion_window() / brutal.mss,
++        }
++    }
++
++    fn can_send(&self, bytes_in_flight: usize) -> bool {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.can_send(bytes_in_flight),
++            Mode::Brutal(brutal) => bytes_in_flight <= brutal.congestion_window(),
++        }
++    }
++
++    fn on_packet_sent(
++        &mut self, sent_time: Instant, bytes_in_flight: usize,
++        packet_number: u64, bytes: usize, is_retransmissible: bool,
++    ) {
++        if let Mode::Bbr(bbr) = &mut self.mode {
++            bbr.on_packet_sent(
++                sent_time,
++                bytes_in_flight,
++                packet_number,
++                bytes,
++                is_retransmissible,
++            );
++        }
++    }
++
++    fn on_packet_neutered(&mut self, packet_number: u64) {
++        if let Mode::Bbr(bbr) = &mut self.mode {
++            bbr.on_packet_neutered(packet_number);
++        }
++    }
++
++    fn on_congestion_event(
++        &mut self, rtt_updated: bool, prior_in_flight: usize,
++        bytes_in_flight: usize, event_time: Instant, acked_packets: &[Acked],
++        lost_packets: &[Lost], least_unacked: u64, rtt_stats: &RttStats,
++        recovery_stats: &mut RecoveryStats,
++    ) {
++        match &mut self.mode {
++            Mode::Bbr(bbr) => bbr.on_congestion_event(
++                rtt_updated,
++                prior_in_flight,
++                bytes_in_flight,
++                event_time,
++                acked_packets,
++                lost_packets,
++                least_unacked,
++                rtt_stats,
++                recovery_stats,
++            ),
++
++            // Loss never reduces the window, it only lowers the ACK rate.
++            Mode::Brutal(brutal) => brutal.on_congestion_event(
++                event_time,
++                acked_packets.len(),
++                lost_packets.len(),
++                rtt_stats,
++            ),
++        }
++    }
++
++    fn on_retransmission_timeout(&mut self, packets_retransmitted: bool) {
++        if let Mode::Bbr(bbr) = &mut self.mode {
++            bbr.on_retransmission_timeout(packets_retransmitted);
++        }
++    }
++
++    fn on_connection_migration(&mut self) {
++        if let Mode::Bbr(bbr) = &mut self.mode {
++            bbr.on_connection_migration();
++        }
++    }
++
++    fn limit_cwnd(&mut self, max_cwnd: usize) {
++        if let Mode::Bbr(bbr) = &mut self.mode {
++            bbr.limit_cwnd(max_cwnd);
++        }
++    }
++
++    fn is_in_recovery(&self) -> bool {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.is_in_recovery(),
++            Mode::Brutal(_) => false,
++        }
++    }
++
++    fn is_cwnd_limited(&self, bytes_in_flight: usize) -> bool {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.is_cwnd_limited(bytes_in_flight),
++            Mode::Brutal(brutal) => bytes_in_flight >= brutal.congestion_window(),
++        }
++    }
++
++    fn pacing_rate(
++        &self, bytes_in_flight: usize, rtt_stats: &RttStats,
++    ) -> Bandwidth {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.pacing_rate(bytes_in_flight, rtt_stats),
++            Mode::Brutal(brutal) => brutal.pacing_rate(),
++        }
++    }
++
++    fn bandwidth_estimate(&self, rtt_stats: &RttStats) -> Bandwidth {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.bandwidth_estimate(rtt_stats),
++            Mode::Brutal(brutal) => brutal.pacing_rate(),
++        }
++    }
++
++    fn max_bandwidth(&self) -> Bandwidth {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.max_bandwidth(),
++            Mode::Brutal(brutal) => brutal.pacing_rate(),
++        }
++    }
++
++    fn update_mss(&mut self, new_mss: usize) {
++        self.mss = new_mss;
++
++        match &mut self.mode {
++            Mode::Bbr(bbr) => bbr.update_mss(new_mss),
++            Mode::Brutal(brutal) => brutal.mss = new_mss,
++        }
++    }
++
++    fn on_app_limited(&mut self, bytes_in_flight: usize) {
++        if let Mode::Bbr(bbr) = &mut self.mode {
++            bbr.on_app_limited(bytes_in_flight);
++        }
++    }
++
++    #[cfg(feature = "qlog")]
++    fn ssthresh(&self) -> Option<u64> {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.ssthresh(),
++            Mode::Brutal(_) => None,
++        }
++    }
++
++    fn max_burst_packets(&self) -> Option<usize> {
++        match &self.mode {
++            Mode::Bbr(bbr) => bbr.max_burst_packets(),
++            Mode::Brutal(brutal) => Some(brutal.max_burst_packets()),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    const MSS: usize = 1200;
++    const INITIAL_WINDOW_PACKETS: usize = 10;
++    const RATE: u64 = 1_000_000;
++    const RTT: Duration = Duration::from_millis(125);
++
++    fn new_brutal() -> Brutal {
++        Brutal::new(
++            INITIAL_WINDOW_PACKETS,
++            20_000,
++            MSS,
++            Duration::from_millis(333),
++            None,
++        )
++    }
++
++    fn rtt_stats(now: Instant) -> RttStats {
++        let mut rtt_stats =
++            RttStats::new(Duration::from_millis(333), Duration::from_millis(25));
++        rtt_stats.update_rtt(RTT, Duration::ZERO, now, true);
++        rtt_stats
++    }
++
++    fn congestion_event(
++        brutal: &mut Brutal, event_time: Instant, acked: usize, lost: usize,
++        rtt_stats: &RttStats,
++    ) {
++        let acked: Vec<Acked> = (0..acked)
++            .map(|i| Acked {
++                pkt_num: i as u64,
++                time_sent: event_time,
++            })
++            .collect();
++        let lost: Vec<Lost> = (0..lost)
++            .map(|i| Lost {
++                packet_number: i as u64,
++                bytes_lost: MSS,
++            })
++            .collect();
++
++        brutal.on_congestion_event(
++            true,
++            0,
++            0,
++            event_time,
++            &acked,
++            &lost,
++            0,
++            rtt_stats,
++            &mut RecoveryStats::default(),
++        );
++    }
++
++    fn ack_rate(brutal: &Brutal) -> f64 {
++        match &brutal.mode {
++            Mode::Brutal(brutal) => brutal.ack_rate,
++            Mode::Bbr(_) => panic!("not in Brutal mode"),
++        }
++    }
++
++    fn expected_cwnd(rate: u64, ack_rate: f64) -> usize {
++        (rate as f64 * RTT.as_secs_f64() * CONGESTION_WINDOW_MULTIPLIER /
++            ack_rate) as usize
++    }
++
++    #[test]
++    fn congestion_window() {
++        let now = Instant::now();
++        let mut brutal = new_brutal();
++
++        // Without an RTT sample.
++        let no_rtt =
++            RttStats::new(Duration::from_millis(333), Duration::from_millis(25));
++        brutal.set_rate(RATE, &no_rtt);
++        assert_eq!(brutal.get_congestion_window(), NO_RTT_CONGESTION_WINDOW);
++
++        let rtt_stats = rtt_stats(now);
++        congestion_event(&mut brutal, now, 1, 0, &rtt_stats);
++
++        // 1 MB/s * 125 ms * 2 / 1.0
++        assert_eq!(brutal.get_congestion_window(), 250_000);
++        assert_eq!(expected_cwnd(RATE, 1.0), 250_000);
++        assert_eq!(
++            brutal.get_congestion_window_in_packets(),
++            250_000 / MSS
++        );
++        assert!(brutal.can_send(250_000));
++        assert!(!brutal.can_send(250_001));
++
++        assert_eq!(
++            brutal.pacing_rate(0, &rtt_stats),
++            Bandwidth::from_bytes_per_second(RATE)
++        );
++
++        // The window never goes below one datagram.
++        brutal.set_rate(1, &rtt_stats);
++        assert_eq!(brutal.get_congestion_window(), MSS);
++    }
++
++    #[test]
++    fn ack_rate_floor() {
++        let now = Instant::now();
++        let rtt_stats = rtt_stats(now);
++        let mut brutal = new_brutal();
++        brutal.set_rate(RATE, &rtt_stats);
++
++        congestion_event(&mut brutal, now, 10, 90, &rtt_stats);
++
++        assert_eq!(ack_rate(&brutal), MIN_ACK_RATE);
++        assert_eq!(
++            brutal.get_congestion_window(),
++            expected_cwnd(RATE, MIN_ACK_RATE)
++        );
++        assert_eq!(
++            brutal.pacing_rate(0, &rtt_stats),
++            Bandwidth::from_bytes_per_second((RATE as f64 / MIN_ACK_RATE) as u64)
++        );
++
++        // Above the floor, the measured rate is used.
++        congestion_event(&mut brutal, now, 900, 0, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), 910.0 / 1000.0);
++    }
++
++    #[test]
++    fn ack_rate_min_samples() {
++        let now = Instant::now();
++        let rtt_stats = rtt_stats(now);
++        let mut brutal = new_brutal();
++        brutal.set_rate(RATE, &rtt_stats);
++
++        congestion_event(&mut brutal, now, 10, 39, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), 1.0);
++        assert_eq!(brutal.get_congestion_window(), expected_cwnd(RATE, 1.0));
++
++        // The 50th sample enables the measured rate.
++        congestion_event(&mut brutal, now, 0, 1, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), MIN_ACK_RATE);
++    }
++
++    #[test]
++    fn ack_rate_window_expiry() {
++        let now = Instant::now();
++        let rtt_stats = rtt_stats(now);
++        let mut brutal = new_brutal();
++        brutal.set_rate(RATE, &rtt_stats);
++
++        // Sets the slot epoch.
++        congestion_event(&mut brutal, now, 0, 0, &rtt_stats);
++
++        let at = |secs| now + Duration::from_secs(secs);
++
++        congestion_event(&mut brutal, at(1), 10, 90, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), MIN_ACK_RATE);
++
++        // Samples from second 1 are still within the window at second 5.
++        congestion_event(&mut brutal, at(5), 1, 0, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), MIN_ACK_RATE);
++
++        // At second 7 they are older than the window.
++        congestion_event(&mut brutal, at(7), 1, 0, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), 1.0);
++        assert_eq!(brutal.get_congestion_window(), expected_cwnd(RATE, 1.0));
++    }
++
++    #[test]
++    fn rate_changes() {
++        let now = Instant::now();
++        let rtt_stats = rtt_stats(now);
++        let mut brutal = new_brutal();
++
++        // Starts delegating to BBRv2.
++        assert!(matches!(brutal.mode, Mode::Bbr(_)));
++        assert_eq!(
++            brutal.get_congestion_window(),
++            INITIAL_WINDOW_PACKETS * MSS
++        );
++        assert_eq!(brutal.max_burst_packets(), None);
++
++        // Setting a rate switches to Brutal, seeding the smoothed RTT.
++        brutal.set_rate(RATE, &rtt_stats);
++        assert!(matches!(brutal.mode, Mode::Brutal(_)));
++        assert_eq!(brutal.get_congestion_window(), expected_cwnd(RATE, 1.0));
++
++        congestion_event(&mut brutal, now, 10, 90, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), MIN_ACK_RATE);
++
++        // Changing the rate resets the samples.
++        brutal.set_rate(2 * RATE, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), 1.0);
++        assert_eq!(
++            brutal.get_congestion_window(),
++            expected_cwnd(2 * RATE, 1.0)
++        );
++
++        congestion_event(&mut brutal, now, 0, 49, &rtt_stats);
++        assert_eq!(ack_rate(&brutal), 1.0);
++
++        // Going back to 0 creates a new BBRv2 instance.
++        brutal.set_rate(0, &rtt_stats);
++        assert!(matches!(brutal.mode, Mode::Bbr(_)));
++        assert_eq!(
++            brutal.get_congestion_window(),
++            INITIAL_WINDOW_PACKETS * MSS
++        );
++
++        brutal.set_rate(0, &rtt_stats);
++        assert!(matches!(brutal.mode, Mode::Bbr(_)));
++    }
++
++    #[test]
++    fn loss_does_not_reduce_window() {
++        let now = Instant::now();
++        let rtt_stats = rtt_stats(now);
++        let mut brutal = new_brutal();
++        brutal.set_rate(RATE, &rtt_stats);
++
++        let floor_cwnd = expected_cwnd(RATE, MIN_ACK_RATE);
++
++        for secs in 0..20 {
++            let event_time = now + Duration::from_secs(secs);
++
++            congestion_event(&mut brutal, event_time, 0, 1000, &rtt_stats);
++            brutal.on_retransmission_timeout(true);
++
++            assert_eq!(brutal.get_congestion_window(), floor_cwnd);
++            assert!(!brutal.is_in_recovery());
++            assert!(brutal.can_send(floor_cwnd));
++        }
++    }
++
++    #[test]
++    fn max_burst() {
++        let now = Instant::now();
++        let rtt_stats = rtt_stats(now);
++        let mut brutal = new_brutal();
++
++        // 4 ms at 1 MB/s is 4000 bytes, below 10 datagrams.
++        brutal.set_rate(RATE, &rtt_stats);
++        assert_eq!(brutal.max_burst_packets(), Some(MAX_BURST_PACKETS));
++
++        // 4 ms at 100 MB/s is 400000 bytes.
++        brutal.set_rate(100 * RATE, &rtt_stats);
++        assert_eq!(
++            brutal.max_burst_packets(),
++            Some(400_000_usize.div_ceil(MSS))
++        );
++
++        // The burst is based on the compensated pacing rate.
++        congestion_event(&mut brutal, now, 10, 90, &rtt_stats);
++        let pacing = (100 * RATE) as f64 / MIN_ACK_RATE;
++        let burst = Bandwidth::from_bytes_per_second(pacing as u64)
++            .to_bytes_per_period(MAX_BURST_PACING_DELAY);
++        assert_eq!(
++            brutal.max_burst_packets(),
++            Some(burst.div_ceil(MSS as u64) as usize)
++        );
++    }
++}
+diff --git a/quiche/quiche/src/recovery/gcongestion/mod.rs b/quiche/quiche/src/recovery/gcongestion/mod.rs
+index 05ceca85..2b7773e3 100644
+--- a/quiche/quiche/src/recovery/gcongestion/mod.rs
++++ b/quiche/quiche/src/recovery/gcongestion/mod.rs
+@@ -26,6 +26,7 @@
+ 
+ mod bbr;
+ mod bbr2;
++mod brutal;
+ pub mod pacer;
+ mod recovery;
+ 
+@@ -33,6 +34,8 @@ use std::fmt::Debug;
+ use std::str::FromStr;
+ use std::time::Instant;
+ 
++use self::bbr2::BBRv2;
++use self::brutal::Brutal;
+ pub use self::recovery::GRecovery;
+ use crate::recovery::bandwidth::Bandwidth;
+ 
+@@ -51,6 +54,7 @@ pub struct Acked {
+     pub(super) time_sent: Instant,
+ }
+ 
++#[enum_dispatch::enum_dispatch]
+ pub(super) trait CongestionControl: Debug {
+     /// Returns the name of the current state of the congestion control state
+     /// machine. Used to annotate qlogs after state transitions.
+@@ -129,6 +133,59 @@ pub(super) trait CongestionControl: Debug {
+     fn ssthresh(&self) -> Option<u64> {
+         None
+     }
++
++    /// Returns the number of packets the pacer may send in a burst, if the
++    /// congestion controller overrides the pacer's lumpy pacing.
++    fn max_burst_packets(&self) -> Option<usize> {
++        None
++    }
++}
++
++/// The congestion controllers driven by [`GRecovery`].
++#[enum_dispatch::enum_dispatch(CongestionControl)]
++#[allow(clippy::large_enum_variant)]
++#[derive(Debug)]
++pub(crate) enum Congestion {
++    BBRv2(BBRv2),
++    Brutal(Brutal),
++}
++
++impl Congestion {
++    pub(crate) fn time_sent_set_to_now(&self) -> bool {
++        match self {
++            Congestion::BBRv2(bbr) => bbr.time_sent_set_to_now(),
++            Congestion::Brutal(brutal) => brutal.time_sent_set_to_now(),
++        }
++    }
++
++    #[cfg(feature = "qlog")]
++    pub(crate) fn send_rate(&self) -> Option<Bandwidth> {
++        match self {
++            Congestion::BBRv2(bbr) => bbr.send_rate(),
++            Congestion::Brutal(brutal) => brutal.send_rate(),
++        }
++    }
++
++    #[cfg(feature = "qlog")]
++    pub(crate) fn ack_rate(&self) -> Option<Bandwidth> {
++        match self {
++            Congestion::BBRv2(bbr) => bbr.ack_rate(),
++            Congestion::Brutal(brutal) => brutal.ack_rate(),
++        }
++    }
++
++    pub(crate) fn set_brutal_rate(
++        &mut self, bytes_per_sec: u64, rtt_stats: &RttStats,
++    ) -> crate::Result<()> {
++        match self {
++            Congestion::BBRv2(_) => Err(crate::Error::CongestionControl),
++
++            Congestion::Brutal(brutal) => {
++                brutal.set_rate(bytes_per_sec, rtt_stats);
++                Ok(())
++            },
++        }
++    }
+ }
+ 
+ /// BBR settings used to customize the algorithm's behavior.
+diff --git a/quiche/quiche/src/recovery/gcongestion/pacer.rs b/quiche/quiche/src/recovery/gcongestion/pacer.rs
+index f1d939f1..e6fe820a 100644
+--- a/quiche/quiche/src/recovery/gcongestion/pacer.rs
++++ b/quiche/quiche/src/recovery/gcongestion/pacer.rs
+@@ -30,13 +30,14 @@
+ 
+ use std::time::Instant;
+ 
+-use crate::recovery::gcongestion::bbr2::BBRv2;
+ use crate::recovery::gcongestion::Bandwidth;
++use crate::recovery::gcongestion::Congestion;
+ use crate::recovery::gcongestion::CongestionControl;
+ use crate::recovery::rtt::RttStats;
+ use crate::recovery::RecoveryStats;
+ use crate::recovery::ReleaseDecision;
+ use crate::recovery::ReleaseTime;
++use crate::Result;
+ 
+ use super::Acked;
+ use super::Lost;
+@@ -63,7 +64,7 @@ pub struct Pacer {
+     /// Should this [`Pacer`] be making any release decisions?
+     enabled: bool,
+     /// Underlying sender
+-    sender: BBRv2,
++    sender: Congestion,
+     /// The maximum rate the [`Pacer`] will use.
+     max_pacing_rate: Option<Bandwidth>,
+     /// Number of unpaced packets to be sent before packets are delayed.
+@@ -84,7 +85,8 @@ impl Pacer {
+     /// implementation, and an optional throttling as specified by
+     /// `max_pacing_rate`.
+     pub(crate) fn new(
+-        enabled: bool, congestion: BBRv2, max_pacing_rate: Option<Bandwidth>,
++        enabled: bool, congestion: Congestion,
++        max_pacing_rate: Option<Bandwidth>,
+     ) -> Self {
+         Pacer {
+             enabled,
+@@ -184,6 +186,11 @@ impl Pacer {
+                 // limited.
+                 self.lumpy_tokens = 1;
+             }
++
++            // Fixed rate senders (Brutal) define their own burst size.
++            if let Some(max_burst_packets) = self.sender.max_burst_packets() {
++                self.lumpy_tokens = max_burst_packets.max(1);
++            }
+         }
+ 
+         self.lumpy_tokens -= 1;
+@@ -277,6 +284,12 @@ impl Pacer {
+         self.sender.update_mss(new_mss)
+     }
+ 
++    pub fn set_brutal_rate(
++        &mut self, bytes_per_sec: u64, rtt_stats: &RttStats,
++    ) -> Result<()> {
++        self.sender.set_brutal_rate(bytes_per_sec, rtt_stats)
++    }
++
+     #[cfg(feature = "qlog")]
+     pub fn ssthresh(&self) -> Option<u64> {
+         self.sender.ssthresh()
+diff --git a/quiche/quiche/src/recovery/gcongestion/recovery.rs b/quiche/quiche/src/recovery/gcongestion/recovery.rs
+index 6f3aaf60..965aec7f 100644
+--- a/quiche/quiche/src/recovery/gcongestion/recovery.rs
++++ b/quiche/quiche/src/recovery/gcongestion/recovery.rs
+@@ -42,8 +42,10 @@ use crate::recovery::MAX_PTO_PROBES_COUNT;
+ use crate::recovery::PACKET_REORDER_TIME_THRESHOLD;
+ 
+ use super::bbr2::BBRv2;
++use super::brutal::Brutal;
+ use super::pacer::Pacer;
+ use super::Acked;
++use super::Congestion;
+ use super::Lost;
+ 
+ // Congestion Control
+@@ -512,14 +514,23 @@ impl GRecovery {
+     }
+ 
+     pub fn new(recovery_config: &RecoveryConfig) -> Option<Self> {
+-        let cc = match recovery_config.cc_algorithm {
++        let cc: Congestion = match recovery_config.cc_algorithm {
+             CongestionControlAlgorithm::Bbr2Gcongestion => BBRv2::new(
+                 recovery_config.initial_congestion_window_packets,
+                 MAX_WINDOW_PACKETS,
+                 recovery_config.max_send_udp_payload_size,
+                 recovery_config.initial_rtt,
+                 recovery_config.custom_bbr_params.as_ref(),
+-            ),
++            )
++            .into(),
++            CongestionControlAlgorithm::Brutal => Brutal::new(
++                recovery_config.initial_congestion_window_packets,
++                MAX_WINDOW_PACKETS,
++                recovery_config.max_send_udp_payload_size,
++                recovery_config.initial_rtt,
++                recovery_config.custom_bbr_params.as_ref(),
++            )
++            .into(),
+             _ => return None,
+         };
+ 
+@@ -1182,6 +1193,10 @@ impl RecoveryOps for GRecovery {
+         true
+     }
+ 
++    fn set_brutal_rate(&mut self, bytes_per_sec: u64) -> Result<()> {
++        self.pacer.set_brutal_rate(bytes_per_sec, &self.rtt_stats)
++    }
++
+     #[cfg(feature = "qlog")]
+     fn state_str(&self, _now: Instant) -> &'static str {
+         self.pacer.state_str()
+diff --git a/quiche/quiche/src/recovery/mod.rs b/quiche/quiche/src/recovery/mod.rs
+index fd62c3fa..e48d450c 100644
+--- a/quiche/quiche/src/recovery/mod.rs
++++ b/quiche/quiche/src/recovery/mod.rs
+@@ -321,6 +321,10 @@ pub trait RecoveryOps {
+     fn get_next_release_time(&self) -> ReleaseDecision;
+ 
+     fn gcongestion_enabled(&self) -> bool;
++
++    /// Sets the send rate of the Brutal congestion controller, in bytes per
++    /// second. Returns `Error::CongestionControl` for other algorithms.
++    fn set_brutal_rate(&mut self, bytes_per_sec: u64) -> Result<()>;
+ }
+ 
+ impl Recovery {
+@@ -374,6 +378,12 @@ pub enum CongestionControlAlgorithm {
+     /// BBRv2 congestion control algorithm implementation from gcongestion
+     /// branch. `bbr2_gcongestion` in a string form.
+     Bbr2Gcongestion = 4,
++    /// Brutal congestion control algorithm from Hysteria, with a fixed send
++    /// rate set by [`Connection::set_brutal_rate()`]. Behaves as
++    /// `Bbr2Gcongestion` until a rate is set. `brutal` in a string form.
++    ///
++    /// [`Connection::set_brutal_rate()`]: ../struct.Connection.html#method.set_brutal_rate
++    Brutal          = 5,
+ }
+ 
+ impl FromStr for CongestionControlAlgorithm {
+@@ -389,6 +399,7 @@ impl FromStr for CongestionControlAlgorithm {
+             "bbr" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
+             "bbr2" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
+             "bbr2_gcongestion" => Ok(CongestionControlAlgorithm::Bbr2Gcongestion),
++            "brutal" => Ok(CongestionControlAlgorithm::Brutal),
+             _ => Err(crate::Error::CongestionControl),
+         }
+     }
+@@ -863,6 +874,10 @@ mod tests {
+             CongestionControlAlgorithm::from_str("bbr2_gcongestion").unwrap();
+         assert_eq!(algo, CongestionControlAlgorithm::Bbr2Gcongestion);
+         assert!(recovery_for_alg(algo).gcongestion_enabled());
++
++        let algo = CongestionControlAlgorithm::from_str("brutal").unwrap();
++        assert_eq!(algo, CongestionControlAlgorithm::Brutal);
++        assert!(recovery_for_alg(algo).gcongestion_enabled());
+     }
+ 
+     #[test]
+diff --git a/quiche/quiche/src/tests.rs b/quiche/quiche/src/tests.rs
+index b22be3a3..58416479 100644
+--- a/quiche/quiche/src/tests.rs
++++ b/quiche/quiche/src/tests.rs
+@@ -12897,3 +12897,135 @@ fn server_qlog() {
+         panic!("expected Qlog event");
+     }
+ }
++
++#[test]
++fn brutal_set_rate() {
++    let mut pipe = test_utils::Pipe::new("brutal").unwrap();
++    assert_eq!(pipe.handshake(), Ok(()));
++
++    assert_eq!(pipe.client.set_brutal_rate(10_000_000), Ok(()));
++    assert_eq!(pipe.server.set_brutal_rate(20_000_000), Ok(()));
++
++    let client_path = pipe.client.paths.get_active().unwrap();
++    assert_eq!(client_path.recovery.pacing_rate(), 10_000_000);
++
++    let server_path = pipe.server.paths.get_active().unwrap();
++    assert_eq!(server_path.recovery.pacing_rate(), 20_000_000);
++
++    // Going back to BBRv2 is allowed.
++    assert_eq!(pipe.client.set_brutal_rate(0), Ok(()));
++}
++
++#[rstest]
++fn brutal_set_rate_other_cc(
++    #[values("reno", "cubic", "bbr2_gcongestion")] cc_algorithm_name: &str,
++) {
++    let mut pipe = test_utils::Pipe::new(cc_algorithm_name).unwrap();
++    assert_eq!(pipe.handshake(), Ok(()));
++
++    assert_eq!(
++        pipe.client.set_brutal_rate(10_000_000),
++        Err(Error::CongestionControl)
++    );
++    assert_eq!(
++        pipe.server.set_brutal_rate(10_000_000),
++        Err(Error::CongestionControl)
++    );
++}
++
++#[test]
++fn brutal_transfer() {
++    const DATA_LEN: usize = 1_000_000;
++
++    let mut config = test_utils::Pipe::default_config("brutal").unwrap();
++    config.set_initial_max_data(2 * DATA_LEN as u64);
++    config.set_initial_max_stream_data_bidi_local(2 * DATA_LEN as u64);
++    config.set_initial_max_stream_data_bidi_remote(2 * DATA_LEN as u64);
++
++    let mut pipe = test_utils::Pipe::with_config(&mut config).unwrap();
++    assert_eq!(pipe.handshake(), Ok(()));
++
++    assert_eq!(pipe.client.set_brutal_rate(100_000_000), Ok(()));
++    assert_eq!(pipe.server.set_brutal_rate(100_000_000), Ok(()));
++
++    let data = vec![0xba; DATA_LEN];
++    let mut sent = 0;
++    let mut received = 0;
++    let mut fin = false;
++
++    for _ in 0..10_000 {
++        if sent < DATA_LEN {
++            match pipe.client.stream_send(0, &data[sent..], true) {
++                Ok(written) => sent += written,
++
++                Err(Error::Done) => (),
++
++                Err(e) => panic!("stream_send failed: {e:?}"),
++            }
++        }
++
++        assert_eq!(pipe.advance(), Ok(()));
++
++        while let Ok((read, stream_fin)) =
++            stream_recv_discard(&mut pipe.server, true, 0)
++        {
++            received += read;
++            fin = stream_fin;
++
++            if fin {
++                break;
++            }
++        }
++
++        if fin {
++            break;
++        }
++    }
++
++    assert_eq!(sent, DATA_LEN);
++    assert_eq!(received, DATA_LEN);
++    assert!(fin);
++}
++
++#[test]
++fn brutal_rate_on_new_paths() {
++    let mut config = Config::new(PROTOCOL_VERSION).unwrap();
++    assert_eq!(config.set_cc_algorithm_name("brutal"), Ok(()));
++    config
++        .load_cert_chain_from_pem_file("examples/cert.crt")
++        .unwrap();
++    config
++        .load_priv_key_from_pem_file("examples/cert.key")
++        .unwrap();
++    config
++        .set_application_protos(&[b"proto1", b"proto2"])
++        .unwrap();
++    config.verify_peer(false);
++    config.set_active_connection_id_limit(2);
++
++    let mut pipe = pipe_with_exchanged_cids(&mut config, 16, 16, 1);
++
++    assert_eq!(pipe.client.set_brutal_rate(10_000_000), Ok(()));
++    assert_eq!(pipe.server.set_brutal_rate(20_000_000), Ok(()));
++
++    let server_addr = test_utils::Pipe::server_addr();
++    let client_addr_2 = "127.0.0.1:5678".parse().unwrap();
++    assert_eq!(pipe.client.probe_path(client_addr_2, server_addr), Ok(1));
++    assert_eq!(pipe.advance(), Ok(()));
++
++    let client_pid = pipe
++        .client
++        .paths
++        .path_id_from_addrs(&(client_addr_2, server_addr))
++        .unwrap();
++    let client_path = pipe.client.paths.get(client_pid).unwrap();
++    assert_eq!(client_path.recovery.pacing_rate(), 10_000_000);
++
++    let server_pid = pipe
++        .server
++        .paths
++        .path_id_from_addrs(&(server_addr, client_addr_2))
++        .unwrap();
++    let server_path = pipe.server.paths.get(server_pid).unwrap();
++    assert_eq!(server_path.recovery.pacing_rate(), 20_000_000);
++}
+diff --git a/quiche-bindgen/include/quiche.h b/quiche-bindgen/include/quiche.h
+index 9b3391d..49ecfcf 100644
+--- a/quiche-bindgen/include/quiche.h
++++ b/quiche-bindgen/include/quiche.h
+@@ -238,6 +238,7 @@ enum quiche_cc_algorithm {
+     QUICHE_CC_RENO = 0,
+     QUICHE_CC_CUBIC = 1,
+     QUICHE_CC_BBR2_GCONGESTION = 4,
++    QUICHE_CC_BRUTAL = 5,
+ };
+ 
+ // Sets the congestion control algorithm used.
+@@ -355,6 +356,11 @@ int quiche_conn_set_session(quiche_conn *conn, const uint8_t *buf, size_t buf_le
+ // no timeout.
+ int quiche_conn_set_max_idle_timeout(quiche_conn *conn, uint64_t v);
+ 
++// Sets the send rate of the Brutal congestion control algorithm, in bytes per
++// second, on all paths. A rate of 0 falls back to BBRv2. Returns
++// QUICHE_ERR_CONGESTION_CONTROL if the algorithm is not QUICHE_CC_BRUTAL.
++int quiche_conn_set_brutal_rate(quiche_conn *conn, uint64_t bytes_per_sec);
++
+ typedef struct {
+     // The remote address the packet was received from.
+     struct sockaddr *from;
