@@ -227,6 +227,10 @@ void quiche_config_set_ack_delay_exponent(quiche_config *config, uint64_t v);
 // Sets the `max_ack_delay` transport parameter.
 void quiche_config_set_max_ack_delay(quiche_config *config, uint64_t v);
 
+// Sets the initial RTT estimate, in milliseconds, used until the first RTT
+// sample (default 333). Values below 1 are raised to 1.
+void quiche_config_set_initial_rtt(quiche_config *config, uint64_t v);
+
 // Sets the `disable_active_migration` transport parameter.
 void quiche_config_set_disable_active_migration(quiche_config *config, bool v);
 
