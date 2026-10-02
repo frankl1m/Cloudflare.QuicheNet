@@ -108,6 +108,29 @@ for abi in "${ABIS[@]}"; do
         exit 1
     fi
     echo "LOAD alignment: $("$LLVM/bin/llvm-readelf" -lW "$lib" | awk '$1 == "LOAD" {print $NF}' | sort -u | tr '\n' ' ')"
+
+    # What the dynamic linker of old API levels needs: DT_HASH (DT_GNU_HASH alone is API 23+),
+    # no packed relocations (RELR is API 28+, Android's APS2 API 23+), no ELF TLS (API 29+), and
+    # every strong symbol it imports present in the libraries of API $API (weak ones, like
+    # BoringSSL's getrandom, resolve to null and fall back).
+    dynamic="$("$LLVM/bin/llvm-readelf" -d "$lib")"
+    old_api_errors=""
+    echo "$dynamic" | grep -q '(HASH)' || old_api_errors+=" no-DT_HASH"
+    echo "$dynamic" | grep -qE '\((RELR|ANDROID_REL|ANDROID_RELA)\)' && old_api_errors+=" packed-relocations"
+    "$LLVM/bin/llvm-readelf" -lW "$lib" | grep -q ' TLS ' && old_api_errors+=" PT_TLS"
+    api_libs="$SYSROOT/usr/lib/$(include_of "$triple")/$API"
+    api_symbols="$(for l in libc.so libm.so libdl.so liblog.so; do
+        [ -f "$api_libs/$l" ] && "$LLVM/bin/llvm-nm" -D --defined-only "$api_libs/$l" | awk '{print $3}' | sed 's/@.*//'
+    done | sort -u)"
+    while read -r bind name; do
+        [ "$bind" = GLOBAL ] || continue
+        echo "$api_symbols" | grep -qx "$name" || old_api_errors+=" $name"
+    done < <("$LLVM/bin/llvm-readelf" --dyn-syms -W "$lib" | awk '$7 == "UND" && $8 != "" {sub(/@.*/, "", $8); print $5, $8}')
+    if [ -n "$old_api_errors" ]; then
+        echo "error: $abi would not load on API $API:$old_api_errors" >&2
+        exit 1
+    fi
+    echo "loads on API $API: DT_HASH, no packed relocations, no ELF TLS, imports present"
     echo "layout:"
     sed -E 's/^"([^"]+)".*- *([0-9]+)usize$/  \1 = \2/' "$WORK/layout-$abi.rs"
 

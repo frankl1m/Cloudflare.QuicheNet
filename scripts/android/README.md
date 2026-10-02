@@ -18,6 +18,7 @@ For each ABI, `build.sh` checks and prints:
 - the exports: 173 `_quiche_` functions;
 - NEEDED: only system libraries, never `libc++_shared.so`, and no unresolved libc++ symbols;
 - the LOAD alignment: `0x4000` on the 64-bit ABIs;
+- that it loads on the oldest API it targets (21, Android 5.0, the lowest that .NET for Android, NDK r26+ and Rust support): `DT_HASH` besides `DT_GNU_HASH` (alone, API 23+), no packed relocations (RELR is API 28+, Android's APS2 API 23+), no ELF TLS (API 29+), and every strong symbol it imports present in the API 21 libraries. The weak ones, like the `getrandom` (API 28) that BoringSSL uses, resolve to null on older devices and BoringSSL falls back to the system call;
 - the size and offsets that bindgen computed with the NDK headers for `quiche_send_info`, `quiche_path_stats` and `quiche_stats`, kept in `~/quichenet-build-android/layout-<abi>.rs`.
 
 On the 32-bit ABIs, `timespec` is `{i32, i32}` and `sockaddr_storage` is 4-aligned, and `u64` is 4-aligned on `x86`, so those structs differ from the 64-bit ones: a C# wrapper has to read them with these offsets.
