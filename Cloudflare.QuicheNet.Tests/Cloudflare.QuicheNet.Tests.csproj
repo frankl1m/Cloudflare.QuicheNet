@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <QuicheTestsTargetFramework Condition="'$(QuicheTestsTargetFramework)' == ''">net10.0</QuicheTestsTargetFramework>
+    <TargetFramework>$(QuicheTestsTargetFramework)</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Cloudflare.QuicheNet/Cloudflare.QuicheNet.csproj" />
+  </ItemGroup>
+</Project>

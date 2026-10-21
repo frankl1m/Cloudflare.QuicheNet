@@ -1,66 +1,41 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
-	<PropertyGroup>
-		<TargetFrameworks>net10.0-ios</TargetFrameworks>
-		<RuntimeIdentifiers>iossimulator-x64;iossimulator-arm64;ios-arm64</RuntimeIdentifiers>
-		<ImplicitUsings>enable</ImplicitUsings>
-		<Nullable>enable</Nullable>
-		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
-		<OutputType>Library</OutputType>
-	</PropertyGroup>
-
-	<PropertyGroup>
-		<IsPackable>true</IsPackable>
-		<PackageId>Cloudflare.QuicheNet.NativeAssets.iOS</PackageId>
-		<Company>Cloudflare Inc.</Company>
-		<Description>A delicious C# wrapper for Cloudflare's quiche library</Description>
-		<PackageTags>quiche;networking;bindings;native;wrapper;quic</PackageTags>
-		<PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
-		<RepositoryUrl>https://github.com/IsaMorphic/Cloudflare.QuicheNet</RepositoryUrl>
-		<RepositoryType>git</RepositoryType>
-		<IncludeBuildOutput>false</IncludeBuildOutput>
-	</PropertyGroup>
-
-
-	<ItemGroup>
-		<Compile Remove="runtimes/**" />
-		<EmbeddedResource Remove="runtimes/**" />
-		<None Remove="runtimes/**" />
-	</ItemGroup>
-
-	<PropertyGroup>
-		<RustTargetTriple Condition="'$(RuntimeIdentifier)' == 'iossimulator-x64'">x86_64-apple-ios</RustTargetTriple>
-		<RustTargetTriple Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">aarch64-apple-ios-sim</RustTargetTriple>
-		<RustTargetTriple Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">aarch64-apple-ios</RustTargetTriple>
-		<RustLibraryFileName Condition="'$(RuntimeIdentifier)' == 'iossimulator-x64'">libquiche_bindgen.dylib</RustLibraryFileName>
-		<RustLibraryFileName Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">libquiche_bindgen.dylib</RustLibraryFileName>
-		<RustLibraryFileName Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">libquiche_bindgen.dylib</RustLibraryFileName>
-	</PropertyGroup>
-
-	<ItemGroup>
-		<RustTargetOutput Include="../quiche-bindgen/target/$(RustTargetTriple)/release/$(RustLibraryFileName)" />
-		<NativeLibs Include="runtimes/**" />
-		<None Include="@(NativeLibs)" PackagePath="runtimes/">
-			<Pack>true</Pack>
-			<PackageCopyToOutput>true</PackageCopyToOutput>
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</None>
-		<NativeReference Remove="*/**" />
-		<NativeReference Include="@(NativeLibs)" Kind="Dynamic" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<PackageReference Include="MinVer" Version="7.0.0">
-			<PrivateAssets>all</PrivateAssets>
-			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-		</PackageReference>
-	</ItemGroup>
-
-	<Target Condition="'$(RuntimeIdentifier)' != ''" Name="rustc" BeforeTargets="PreBuildEvent">
-		<Exec WorkingDirectory="../quiche-bindgen" Command="rustup target add $(RustTargetTriple)" />
-
-		<Exec WorkingDirectory="../quiche-bindgen" Command="cargo build --target $(RustTargetTriple) --profile release" />
-
-		<Copy SourceFiles="@(RustTargetOutput)" DestinationFolder="runtimes/$(RuntimeIdentifier)/native" />
-	</Target>
+  <PropertyGroup>
+    <TargetFrameworks>net10.0-ios;net10.0-maccatalyst;net10.0-tvos</TargetFrameworks>
+    <TargetFrameworks Condition="'$(EnableAppleLegacyTargets)' == 'true'">net8.0-ios;net8.0-maccatalyst;net8.0-tvos</TargetFrameworks>
+    <TargetFrameworks Condition="'$(EnableAppleLegacy7Targets)' == 'true'">net7.0-ios;net7.0-maccatalyst;net7.0-tvos</TargetFrameworks>
+    <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net7.0-ios' Or '$(TargetFramework)' == 'net7.0-tvos'">10.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net7.0-maccatalyst'">13.1</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net8.0-ios' Or '$(TargetFramework)' == 'net8.0-tvos'">12.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net8.0-maccatalyst'">13.1</SupportedOSPlatformVersion>
+    <IsPackable>true</IsPackable>
+    <PackageId>Cloudflare.QuicheNet.NativeAssets.iOS</PackageId>
+    <Description>Static quiche XCFramework for iOS/iPadOS devices, simulators, Mac Catalyst and tvOS (Intel and Apple Silicon simulators).</Description>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/frankl1m/Cloudflare.QuicheNet</RepositoryUrl>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <AppleQuicheFramework>$(MSBuildThisFileDirectory)Frameworks/quiche_bindgen.xcframework</AppleQuicheFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MinVer" Version="7.0.0" PrivateAssets="all" />
+    <None Include="Frameworks/quiche_bindgen.xcframework/**/*" Pack="true" PackagePath="Frameworks/quiche_bindgen.xcframework/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="buildTransitive/Cloudflare.QuicheNet.NativeAssets.iOS.targets" Pack="true" PackagePath="buildTransitive/" />
+  </ItemGroup>
+  <!-- P2P consumers need the same native reference as NuGet consumers. -->
+  <Import Project="buildTransitive/Cloudflare.QuicheNet.NativeAssets.iOS.targets" />
+  <Target Name="BuildAppleQuiche" BeforeTargets="PrepareForBuild" Condition="'$(BuildAppleQuicheNative)' == 'true'" >
+    <Exec Command="bash &quot;$(MSBuildThisFileDirectory)../scripts/apple/build.sh&quot; all" />
+  </Target>
+  <Target Name="CollectAppleQuicheAssets" BeforeTargets="_GetPackageFiles" DependsOnTargets="BuildAppleQuiche">
+    <ItemGroup>
+      <None Remove="Frameworks/quiche_bindgen.xcframework/**" />
+      <None Include="Frameworks/quiche_bindgen.xcframework/**/*" Pack="true"
+            PackagePath="Frameworks/quiche_bindgen.xcframework/%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+  </Target>
+  <Target Name="CheckAppleQuichePackage" BeforeTargets="GenerateNuspec" Condition="!Exists('$(AppleQuicheFramework)/Info.plist')">
+    <Error Text="Build the Apple XCFramework first: scripts/apple/build.sh all" />
+  </Target>
+  <Target Name="VerifyAppleQuichePackage" BeforeTargets="GenerateNuspec" Condition="Exists('$(AppleQuicheFramework)/Info.plist')">
+    <Exec Command="python3 &quot;$(MSBuildThisFileDirectory)../scripts/apple/verify.py&quot; &quot;$(AppleQuicheFramework)&quot;" />
+  </Target>
 </Project>

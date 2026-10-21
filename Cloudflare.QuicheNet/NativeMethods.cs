@@ -1,4 +1,5 @@
-﻿using GroupedNativeMethodsGenerator;
+using GroupedNativeMethodsGenerator;
+using System;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
@@ -7,11 +8,15 @@ namespace Cloudflare.Quiche
     [GroupedNativeMethods]
     internal static partial class NativeMethods
     {
+        internal const string LibraryName = __DllName;
+
         public static string? LibraryDirPath { get; set; }
 
         static NativeMethods()
         {
+#if !IOS && !MACCATALYST && !TVOS
             NativeLibrary.SetDllImportResolver(Assembly.GetExecutingAssembly(), ImportResolver);
+#endif
         }
 
         private static IntPtr ImportResolver(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
@@ -21,79 +26,14 @@ namespace Cloudflare.Quiche
                 return IntPtr.Zero;
             }
 
-            string libraryPath;
-            if (LibraryDirPath is null)
-            {
-                string archName;
-                switch (RuntimeInformation.ProcessArchitecture)
-                {
-                    case Architecture.X64:
-                        archName = "x64";
-                        break;
-                    case Architecture.Arm64:
-                        archName = "arm64";
-                        break;
-                    case Architecture.X86:
-                        archName = "x86";
-                        break;
-                    default:
-                        return IntPtr.Zero;
-                }
-
-                string rid, libName;
-                if (OperatingSystem.IsLinux())
-                {
-                    rid = "linux-" + archName;
-                    libName = $"lib{__DllName}.so";
-                }
-                else if (OperatingSystem.IsWindows())
-                {
-                    rid = "win-" + archName;
-                    libName = $"{__DllName}.dll";
-                }
-                else if (OperatingSystem.IsMacOS())
-                {
-                    rid = "osx-" + archName;
-                    libName = $"lib{__DllName}.dylib";
-                }
-                else
-                {
-                    return IntPtr.Zero;
-                }
-
-                libraryPath = Path.Combine(AppContext.BaseDirectory, "runtimes", rid, "native", libName);
-            }
-            else 
-            {
-                string libName;
-                if (OperatingSystem.IsLinux())
-                {
-                    libName = $"lib{__DllName}.so";
-                }
-                else if (OperatingSystem.IsWindows())
-                {
-                    libName = $"{__DllName}.dll";
-                }
-                else if (OperatingSystem.IsMacOS())
-                {
-                    libName = $"lib{__DllName}.dylib";
-                }
-                else
-                {
-                    return IntPtr.Zero;
-                }
-
-                libraryPath = Path.Combine(LibraryDirPath, libName);
-            }
-
-            if (NativeLibrary.TryLoad(libraryPath, out IntPtr handle))
-            {
-                return handle;
-            }
-            else 
+            // El mapa de SO y arquitectura es el de la puerta (UbicacionDelNativo). Lo que no se encuentre aquí vuelve
+            // con IntPtr.Zero a la búsqueda por omisión del runtime, que en .NET para Android conoce las librerías de la app.
+            if (UbicacionDelNativo.Actual is not { } ubicacion)
             {
                 return IntPtr.Zero;
             }
+
+            return ubicacion.TryCargar(LibraryDirPath, out IntPtr handle) ? handle : IntPtr.Zero;
         }
     }
 }

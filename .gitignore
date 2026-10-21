@@ -389,3 +389,9 @@ runtimes/
 quiche*.rs
 *.g.cs
 *.pem
+
+# Generated Apple native bundles
+*.xcframework/
+
+# Portable managed ABI declarations are source, not a host-generated output.
+!Cloudflare.QuicheNet/NativeMethods.g.cs

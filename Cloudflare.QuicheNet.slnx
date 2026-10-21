@@ -6,4 +6,5 @@
   <Project Path="Cloudflare.QuicheNet.NativeAssets.macOS/Cloudflare.QuicheNet.NativeAssets.macOS.csproj" />
   <Project Path="Cloudflare.QuicheNet.NativeAssets.Win32/Cloudflare.QuicheNet.NativeAssets.Win32.csproj" />
   <Project Path="Cloudflare.QuicheNet/Cloudflare.QuicheNet.csproj" />
+  <Project Path="Cloudflare.QuicheNet.Tests/Cloudflare.QuicheNet.Tests.csproj" />
 </Solution>

@@ -1,0 +1,38 @@
+name: Apple validation
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feature/brutal-tuic']
+    paths:
+      - 'Cloudflare.QuicheNet/**'
+      - 'Cloudflare.QuicheNet.Tests/**'
+      - 'Cloudflare.QuicheNet.NativeAssets.iOS/**'
+      - 'Cloudflare.QuicheNet.NativeAssets.macOS/**'
+      - 'quiche-bindgen/**'
+      - 'quiche'
+      - 'scripts/apple/**'
+      - 'scripts/macos/**'
+      - '.github/workflows/apple.yml'
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  apple:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: ./scripts/apple/build.sh all
+      - run: python3 scripts/apple/verify.py --link
+      - run: dotnet build Cloudflare.QuicheNet.Tests -p:TargetFrameworks=net10.0 -p:BuildNativeAssets=false
+      - name: QUIC regressions on the runner architecture
+        run: |
+          arch="$(uname -m)"
+          if [ "$arch" = x86_64 ]; then arch=x64; fi
+          QUICHE_NATIVE_DIR="$PWD/Cloudflare.QuicheNet.NativeAssets.macOS/runtimes/osx-$arch/native" \
+            dotnet Cloudflare.QuicheNet.Tests/bin/Debug/net10.0/Cloudflare.QuicheNet.Tests.dll --native

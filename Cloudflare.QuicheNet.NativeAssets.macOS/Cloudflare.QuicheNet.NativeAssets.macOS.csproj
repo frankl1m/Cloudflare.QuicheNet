@@ -16,7 +16,7 @@
 		<Description>A delicious C# wrapper for Cloudflare's quiche library</Description>
 		<PackageTags>quiche;networking;bindings;native;wrapper;quic</PackageTags>
 		<PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
-		<RepositoryUrl>https://github.com/IsaMorphic/Cloudflare.QuicheNet</RepositoryUrl>
+		<RepositoryUrl>https://github.com/frankl1m/Cloudflare.QuicheNet</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<IncludeBuildOutput>false</IncludeBuildOutput>
 	</PropertyGroup>
@@ -52,11 +52,21 @@
 		</PackageReference>
 	</ItemGroup>
 
-	<Target Condition="'$(RuntimeIdentifier)' != ''" Name="rustc" BeforeTargets="PreBuildEvent">
-		<Exec WorkingDirectory="../quiche-bindgen" Command="rustup target add $(RustTargetTriple)" />
-
-		<Exec WorkingDirectory="../quiche-bindgen" Command="cargo build --target $(RustTargetTriple) --profile release" />
-
-		<Copy SourceFiles="@(RustTargetOutput)" DestinationFolder="runtimes/$(RuntimeIdentifier)/native" />
-	</Target>
+  <Target Name="BuildMacQuiche" BeforeTargets="PrepareForBuild" Condition="'$(BuildAppleQuicheNative)' == 'true'">
+    <Exec Command="bash &quot;$(MSBuildThisFileDirectory)../scripts/macos/build.sh&quot; universal" />
+  </Target>
+  <Target Name="CollectMacQuicheAssets" BeforeTargets="_GetPackageFiles;GetCopyToOutputDirectoryItems" DependsOnTargets="BuildMacQuiche">
+    <!-- Native builds may run after project evaluation, so refresh the glob. -->
+    <ItemGroup>
+      <None Remove="runtimes/**;$(MSBuildThisFileDirectory)runtimes/**" />
+      <None Include="$(MSBuildThisFileDirectory)runtimes/**/*"
+            Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)"
+            Link="runtimes/%(RecursiveDir)%(Filename)%(Extension)"
+            CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+  <Target Name="CheckMacQuichePackage" BeforeTargets="GenerateNuspec"
+          Condition="!Exists('$(MSBuildThisFileDirectory)runtimes/osx-x64/native/libquiche_bindgen.dylib') Or !Exists('$(MSBuildThisFileDirectory)runtimes/osx-arm64/native/libquiche_bindgen.dylib')">
+    <Error Text="Build both macOS architectures first: scripts/macos/build.sh universal" />
+  </Target>
 </Project>

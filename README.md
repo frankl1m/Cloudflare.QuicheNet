@@ -4,6 +4,22 @@
 
 A delicious C# wrapper for [Cloudflare's quiche](https://github.com/cloudflare/quiche) library. 
 
+## Fork updates and Apple support
+
+This fork carries the QUIC wrapper changes used in Socks5Lib and builds for macOS
+universal (Intel and Apple Silicon), iOS/iPadOS devices and simulators, Mac Catalyst, and tvOS.
+See [Apple build and integration instructions](scripts/apple/README.md).
+Native Apple assets must be built locally before packaging; this source change
+does not publish new NuGet packages.
+
+The default .NET 10 library profile declares iOS/tvOS 12.2 and Catalyst 13.1 availability; a consuming
+.NET application must also meet its runtime/workload minimum (Catalyst 15.0 for
+.NET 10). On iOS/tvOS 12.2, the native engine supports normal 1-RTT QUIC, but server
+0-RTT admission requires .NET's AES-GCM support (iOS/tvOS 13+). If unavailable,
+the anti-replay gate discards early data while preserving the Initial, Handshake
+and 1-RTT packets; it never accepts unverifiable early data.
+
+
 # How to use 
 
 The wrapper exposes a few key classes that mirror the functionality of .NET's built-in QUIC implementation. Importantly, however, the wrapper is completely cross-platform and includes all native dependencies as part of the [NuGet package](https://www.nuget.org/packages/Cloudflare.QuicheNet). Simply install the package into your project and go!
@@ -119,3 +135,34 @@ All queued `DATAGRAM`s are guaranteed to be delivered, but will not be drained r
 # How it works
 
 Quiche is an abstract implementation of the QUIC protocol. Although QUIC is intended to operate above UDP in the network protocol stack, quiche's implementation is uniquely cross-platform due to existing at a higher layer of abstraction- that is to say, quiche doesn't touch native sockets to do its work. Instead, quiche accepts packet data from the caller, allowing any socket abstraction to exist below it. This allows Quiche.NET to use .NET's `System.Net.Socket` API to transmit raw packet data and schedule packets for sending, while quiche itself unwraps & generates those packets for us whenever they enter or leave the system. 
+
+### Apple en iOS y tvOS 12.0
+
+El perfil opcional `-p:EnableAppleLegacyTargets=true` selecciona `net8.0-ios`,
+`net8.0-maccatalyst` y `net8.0-tvos` tanto en el wrapper como en sus assets Apple.
+Se compila con un SDK .NET 8 y workloads Apple .NET 8 históricos, por separado
+respecto al perfil .NET 10. Sus mínimos de biblioteca son iOS/iPadOS 12.0,
+tvOS 12.0 y Mac Catalyst 13.1. Los simuladores ARM64 requieren el mínimo nativo
+14.0; para simular versiones anteriores se necesita Intel. En este perfil, el guard de AES-GCM deshabilita 0-RTT del servidor en todas
+las versiones de iOS/tvOS/Catalyst, conservando el handshake normal 1-RTT.
+
+Ejemplo de compilación de biblioteca sin regenerar nativos:
+
+```sh
+dotnet build Cloudflare.QuicheNet/Cloudflare.QuicheNet.csproj \
+  -p:EnableAppleLegacyTargets=true -p:BuildNativeAssets=false
+```
+
+El perfil separado `-p:EnableAppleLegacy7Targets=true` selecciona los tres TFM
+Apple de .NET 7 para iOS/tvOS 10.0 y Catalyst 13.1. Requiere los packs Apple
+.NET 7 históricos; puede compilarse con un SDK .NET 8 que los incluya. En los perfiles
+.NET 7 y .NET 8, el wrapper no habilita AES-GCM administrado en iOS/tvOS/Catalyst: la protección
+anti-repetición rechaza 0-RTT y permite continuar el handshake normal 1-RTT.
+Estos perfiles antiguos requieren un Xcode compatible para publicar aplicaciones;
+compilar una biblioteca no valida el enlace AOT ni su ejecución en un dispositivo
+antiguo. El soporte de 32 bits requiere además nativos y ABI verificados por separado.
+
+Los runtimes Mono históricos 7.0.20 y 8.0.7 incluidos en estos workloads tienen
+un mínimo real de Catalyst 13.5 en Intel y 14.2 en ARM64, aunque la biblioteca
+managed declare 13.1. El mínimo de una aplicación es el mayor entre el declarado
+por la aplicación, su runtime .NET y la slice nativa seleccionada.

@@ -1,7 +1,9 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<TargetFrameworks>net7.0;net8.0;net10.0;net10.0-windows;net10.0-macos;net10.0-android;net10.0-ios</TargetFrameworks>
+		<TargetFrameworks>net7.0;net8.0;net10.0;net10.0-windows;net10.0-macos;net10.0-android;net10.0-ios;net10.0-maccatalyst;net10.0-tvos</TargetFrameworks>
+		<TargetFrameworks Condition="'$(EnableAppleLegacyTargets)' == 'true'">net8.0-ios;net8.0-maccatalyst;net8.0-tvos</TargetFrameworks>
+    <TargetFrameworks Condition="'$(EnableAppleLegacy7Targets)' == 'true'">net7.0-ios;net7.0-maccatalyst;net7.0-tvos</TargetFrameworks>
 		<LangVersion>latest</LangVersion>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -11,6 +13,19 @@
 		<IsNuGetBuild>false</IsNuGetBuild>
 	</PropertyGroup>
 
+
+    <!-- Library availability is independent from the SDK surface (TargetPlatformVersion).
+         .NET 10 application/runtime minima may be higher, especially Catalyst. -->
+    <PropertyGroup>
+      <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net7.0-ios' Or '$(TargetFramework)' == 'net7.0-tvos'">10.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net7.0-maccatalyst'">13.1</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net8.0-ios' Or '$(TargetFramework)' == 'net8.0-tvos'">12.0</SupportedOSPlatformVersion>
+      <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net8.0-maccatalyst'">13.1</SupportedOSPlatformVersion>
+      <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net10.0-ios'">12.2</SupportedOSPlatformVersion>
+      <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net10.0-tvos'">12.2</SupportedOSPlatformVersion>
+      <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net10.0-maccatalyst'">13.1</SupportedOSPlatformVersion>
+    </PropertyGroup>
+
 	<PropertyGroup>
 		<IsPackable>true</IsPackable>
 		<PackageId>Cloudflare.QuicheNet</PackageId>
@@ -19,7 +34,7 @@
 		<PackageTags>quiche;networking;bindings;native;wrapper;quic</PackageTags>
 		<PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
-		<RepositoryUrl>https://github.com/IsaMorphic/Cloudflare.QuicheNet</RepositoryUrl>
+		<RepositoryUrl>https://github.com/frankl1m/Cloudflare.QuicheNet</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 	</PropertyGroup>
 
@@ -34,21 +49,17 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="csbindgen" Version="1.9.8">
-			<PrivateAssets>all</PrivateAssets>
-			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-		</PackageReference>
 		<PackageReference Include="MinVer" Version="7.0.0">
 			<PrivateAssets>all</PrivateAssets>
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
 	</ItemGroup>
 
-	<ItemGroup Condition="'$(TargetFramework)' == 'net7.0' Or '$(TargetFramework)' == 'net8.0'">
+	<ItemGroup Condition="'$(TargetFramework)' == 'net7.0' Or '$(TargetFramework)' == 'net8.0' Or '$(EnableAppleLegacyTargets)' == 'true' Or '$(EnableAppleLegacy7Targets)' == 'true'">
 		<PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
 	</ItemGroup>
 
-	<ItemGroup>
+	<ItemGroup Condition="'$(BuildNativeAssets)' != 'false'">
 		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0' Or '$(TargetFramework)' == 'net8.0' Or '$(TargetFramework)' == 'net7.0'"
 			Include="../Cloudflare.QuicheNet.NativeAssets.Linux/Cloudflare.QuicheNet.NativeAssets.Linux.csproj">
 			<ReferenceOutputAssembly>$(IsNuGetBuild)</ReferenceOutputAssembly>
@@ -73,7 +84,7 @@
 			Include="../Cloudflare.QuicheNet.NativeAssets.Android/Cloudflare.QuicheNet.NativeAssets.Android.csproj">
 			<ReferenceOutputAssembly>$(IsNuGetBuild)</ReferenceOutputAssembly>
 		</ProjectReference>
-		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0-ios'"
+		<ProjectReference Condition="'$(TargetFramework)' == 'net10.0-ios' Or '$(TargetFramework)' == 'net10.0-maccatalyst' Or '$(TargetFramework)' == 'net10.0-tvos' Or '$(EnableAppleLegacyTargets)' == 'true' Or '$(EnableAppleLegacy7Targets)' == 'true'"
 			Include="../Cloudflare.QuicheNet.NativeAssets.iOS/Cloudflare.QuicheNet.NativeAssets.iOS.csproj">
 			<ReferenceOutputAssembly>$(IsNuGetBuild)</ReferenceOutputAssembly>
 		</ProjectReference>

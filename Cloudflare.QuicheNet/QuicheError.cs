@@ -1,4 +1,4 @@
-﻿namespace Cloudflare.QuicheNet;
+namespace Cloudflare.QuicheNet;
 
 public enum QuicheError
 {

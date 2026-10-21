@@ -1,0 +1,43 @@
+<Project>
+  <PropertyGroup>
+    <AppleQuicheFramework Condition="'$(AppleQuicheFramework)' == ''">$(MSBuildThisFileDirectory)../Frameworks/quiche_bindgen.xcframework</AppleQuicheFramework>
+    <_AppleQuichePlatform>$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)'))</_AppleQuichePlatform>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(_AppleQuichePlatform)' == 'ios' Or '$(_AppleQuichePlatform)' == 'maccatalyst' Or '$(_AppleQuichePlatform)' == 'tvos'">
+    <NativeReference Include="$(AppleQuicheFramework)">
+      <Kind>Static</Kind>
+      <ForceLoad>true</ForceLoad>
+      <SmartLink>false</SmartLink>
+      <IsCxx>true</IsCxx>
+      <Frameworks>Security SystemConfiguration</Frameworks>
+      <LinkerFlags>-liconv -lresolv</LinkerFlags>
+    </NativeReference>
+  </ItemGroup>
+  <!-- SDKs 16/17 misclassify a static XCFramework slice as a framework.
+       Resolve the archive after the application RID has been computed. -->
+  <Target Name="SelectLegacyAppleQuicheArchive" BeforeTargets="_ExpandNativeReferences"
+          DependsOnTargets="_ComputeTargetArchitectures"
+          Condition="('$(TargetFrameworkVersion)' == 'v7.0' Or '$(TargetFrameworkVersion)' == 'v8.0') And ('$(_AppleQuichePlatform)' == 'ios' Or '$(_AppleQuichePlatform)' == 'maccatalyst' Or '$(_AppleQuichePlatform)' == 'tvos') And Exists('$(AppleQuicheFramework)/Info.plist')">
+    <PropertyGroup>
+      <_AppleQuicheSlice Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">ios-arm64</_AppleQuicheSlice>
+      <_AppleQuicheSlice Condition="'$(RuntimeIdentifier)' == 'iossimulator-x64' Or '$(RuntimeIdentifier)' == 'iossimulator-arm64'">ios-arm64_x86_64-simulator</_AppleQuicheSlice>
+      <_AppleQuicheSlice Condition="'$(RuntimeIdentifier)' == 'maccatalyst-x64' Or '$(RuntimeIdentifier)' == 'maccatalyst-arm64'">ios-arm64_x86_64-maccatalyst</_AppleQuicheSlice>
+      <_AppleQuicheSlice Condition="'$(RuntimeIdentifier)' == 'tvos-arm64'">tvos-arm64</_AppleQuicheSlice>
+      <_AppleQuicheSlice Condition="'$(RuntimeIdentifier)' == 'tvossimulator-x64' Or '$(RuntimeIdentifier)' == 'tvossimulator-arm64'">tvos-arm64_x86_64-simulator</_AppleQuicheSlice>
+      <AppleQuicheStaticLibrary Condition="'$(AppleQuicheStaticLibrary)' == '' And '$(_AppleQuicheSlice)' != ''">$(AppleQuicheFramework)/$(_AppleQuicheSlice)/libquiche_bindgen.a</AppleQuicheStaticLibrary>
+    </PropertyGroup>
+    <Error Condition="'$(AppleQuicheStaticLibrary)' == '' Or !Exists('$(AppleQuicheStaticLibrary)')"
+           Text="No quiche static archive is available for $(RuntimeIdentifier). Build the matching native architecture before linking this application." />
+    <ItemGroup>
+      <NativeReference Remove="$(AppleQuicheFramework)" />
+      <NativeReference Include="$(AppleQuicheStaticLibrary)">
+        <Kind>Static</Kind>
+        <ForceLoad>true</ForceLoad>
+        <SmartLink>false</SmartLink>
+        <IsCxx>true</IsCxx>
+        <Frameworks>Security SystemConfiguration</Frameworks>
+        <LinkerFlags>-liconv -lresolv</LinkerFlags>
+      </NativeReference>
+    </ItemGroup>
+  </Target>
+</Project>
