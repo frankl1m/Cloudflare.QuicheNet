@@ -1,0 +1,29 @@
+<Project>
+<Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+<PropertyGroup>
+<TargetFramework>net7.0-ios</TargetFramework><OutputType>Exe</OutputType>
+<LangVersion>12</LangVersion><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+<ApplicationId>dev.quichenet.apple32smoke</ApplicationId><ApplicationTitle>Quiche Apple32 Smoke</ApplicationTitle>
+<AppleLegacySdkVersion Condition="'$(AppleLegacySdkVersion)' == ''">12.4</AppleLegacySdkVersion>
+<SupportedOSPlatformVersion>10.0</SupportedOSPlatformVersion><MtouchSdkVersion>$(AppleLegacySdkVersion)</MtouchSdkVersion>
+<ModernDeveloperRoot Condition="'$(ModernDeveloperRoot)' == ''">/Applications/Xcode.app/Contents/Developer</ModernDeveloperRoot>
+<MtouchLink>SdkOnly</MtouchLink>
+<SelfContained>true</SelfContained><EnableCodeSigning>false</EnableCodeSigning>
+<CodesignRequireProvisioningProfile>false</CodesignRequireProvisioningProfile>
+</PropertyGroup>
+<ItemGroup><Reference Include="Cloudflare.QuicheNet"><HintPath>$(MSBuildThisFileDirectory)../../../Cloudflare.QuicheNet/bin/Debug/net7.0-ios/Cloudflare.QuicheNet.dll</HintPath></Reference></ItemGroup>
+<Import Project="../../../Cloudflare.QuicheNet.NativeAssets.iOS/buildTransitive/Cloudflare.QuicheNet.NativeAssets.iOS.targets" />
+<Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+<Target Name="UseLegacyTargetSdkWithModernTools" AfterTargets="_DetectSdkLocations">
+<Error Condition="'$(AppleLegacyXcode)' == ''" Text="Set AppleLegacyXcode to the extracted legacy Xcode.app." />
+<PropertyGroup>
+<_Apple32SdkPlatform>iPhoneOS</_Apple32SdkPlatform>
+<_Apple32SdkPlatform Condition="'$(RuntimeIdentifier)' == 'iossimulator-x86'">iPhoneSimulator</_Apple32SdkPlatform>
+<_SdkRoot>$(AppleLegacyXcode)/Contents/Developer/Platforms/$(_Apple32SdkPlatform).platform/Developer/SDKs/$(_Apple32SdkPlatform)$(AppleLegacySdkVersion).sdk</_SdkRoot>
+<_SdkVersion>$(AppleLegacySdkVersion)</_SdkVersion>
+<_SdkDevPath>$(ModernDeveloperRoot)</_SdkDevPath>
+<_SdkBinPath>$(_SdkRoot)/usr/bin</_SdkBinPath>
+<_SdkUsrPath>$(_SdkRoot)/usr</_SdkUsrPath>
+</PropertyGroup>
+</Target>
+</Project>

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate the complete Apple XCFramework without executing foreign slices."""
 import argparse
+import importlib.util
 import plistlib
 import re
 import tempfile
@@ -14,7 +15,10 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('framework', nargs='?', type=Path, default=root / 'Cloudflare.QuicheNet.NativeAssets.iOS/Frameworks/quiche_bindgen.xcframework')
 parser.add_argument('--allow-partial', action='store_true', help='Verify the included slices without requiring every Apple platform')
 parser.add_argument('--link', action='store_true', help='Link a native smoke executable for every platform and architecture')
+parser.add_argument('--include-ios32', action='store_true', help='Require ARMv7s device and i386 simulator slices as well')
+parser.add_argument('--legacy-xcode', type=Path, help='Extracted older Xcode for linking iOS32 probes')
 options = parser.parse_args()
+check32 = None
 framework = options.framework
 expected = {
     ('macos', ''): {'x86_64', 'arm64'},
@@ -26,6 +30,17 @@ expected = {
 }
 with (framework / 'Info.plist').open('rb') as stream:
     slices = plistlib.load(stream)['AvailableLibraries']
+# Packs need no extra flag: accept either complete matrix, never half of iOS32.
+if options.include_ios32 or any(arch in ('armv7s', 'i386') for item in slices for arch in item['SupportedArchitectures']):
+    options.include_ios32 = True
+    expected[('ios', '')].add('armv7s')
+    expected[('ios', 'simulator')].add('i386')
+    specification = importlib.util.spec_from_file_location('quiche_deployment32', root / 'scripts/apple32/deployment.py')
+    module32 = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module32)
+    check32 = module32.check
+    if options.link and options.legacy_xcode is None:
+        parser.error('linking iOS32 requires --legacy-xcode')
 platform_names = {
     ('macos', ''): 'MACOS', ('ios', ''): 'IOS',
     ('ios', 'simulator'): 'IOSSIMULATOR', ('ios', 'maccatalyst'): 'MACCATALYST',
@@ -46,7 +61,7 @@ def verify_object_platforms(library, arch, key):
         else:
             thin = library
         try:
-            count = check(thin, arch, platform_names[key], minimum_for(key, arch))
+            count = check32(thin, arch) if arch in ('armv7s', 'i386') else check(thin, arch, platform_names[key], minimum_for(key, arch))
         except ValueError as error:
             raise SystemExit(f'{library}/{arch}: {error}')
         names = [name for name, _ in inspect_archive(thin, arch)]
@@ -66,11 +81,23 @@ def verify_native_link(library, arch, key):
         ('tvos', 'simulator'): ('appletvsimulator', f'{arch}-apple-tvos{minimum}-simulator'),
     }[key]
     # clang spells the ARM architecture arm64, as lipo does.
-    sysroot = subprocess.check_output(['xcrun', '--sdk', sdk, '--show-sdk-path'], text=True).strip()
+    if arch in ('armv7s', 'i386'):
+        developer = options.legacy_xcode.resolve()
+        if developer.suffix == '.app':
+            developer = developer / 'Contents/Developer'
+        platform = 'iPhoneSimulator' if arch == 'i386' else 'iPhoneOS'
+        candidates = sorted({path.resolve() for path in (developer / f'Platforms/{platform}.platform/Developer/SDKs').glob('*.sdk') if path.is_dir()})
+        if len(candidates) != 1:
+            raise SystemExit(f'Expected one legacy SDK for {platform}: {candidates}')
+        sysroot = str(candidates[0])
+        compiler = [subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip()]
+    else:
+        sysroot = subprocess.check_output(['xcrun', '--sdk', sdk, '--show-sdk-path'], text=True).strip()
+        compiler = ['xcrun', '--sdk', sdk, 'clang']
     output = root / 'quiche-bindgen/target/apple/smoke'
     output.mkdir(parents=True, exist_ok=True)
     source = root / 'scripts/apple/native-smoke.c'
-    subprocess.run(['xcrun', '--sdk', sdk, 'clang', '-target', target, '-isysroot', sysroot,
+    subprocess.run(compiler + ['-target', target, '-isysroot', sysroot,
                     str(source), '-Wl,-force_load,' + str(library.resolve()),
                     '-framework', 'Security', '-framework', 'SystemConfiguration',
                     '-lc++', '-liconv', '-lresolv', '-o', str(output / target)], check=True)

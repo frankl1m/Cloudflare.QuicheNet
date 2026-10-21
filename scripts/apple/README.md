@@ -13,8 +13,8 @@ control and flow-control APIs remain available.
 | Platform | Architectures | Native format |
 | --- | --- | --- |
 | macOS | Intel x86_64 10.12+ / Apple Silicon arm64 11+ | Universal dylib and static XCFramework slice |
-| iOS device | arm64 10+ | Static XCFramework slice |
-| iOS simulator | x86_64 10+ / arm64 14+ | Universal static XCFramework slice |
+| iOS device | arm64 10+ / optional ARMv7s iOS 10 | Static XCFramework slice |
+| iOS simulator | x86_64 10+ / arm64 14+ / optional i386 iOS 10 | Universal static XCFramework slice |
 | Mac Catalyst | x86_64 13.1+ / arm64 14+ | Universal static XCFramework slice |
 | tvOS device | arm64 10+ | Static XCFramework slice |
 | tvOS simulator | x86_64 10+ / arm64 14+ | Universal static XCFramework slice |
@@ -42,7 +42,7 @@ find each SDK and `rustup` to install the corresponding Rust standard libraries.
 ./scripts/macos/build.sh universal
 python3 scripts/macos/verify.py
 
-# All Apple architectures and one XCFramework with all six platform slices
+# All 64-bit Apple architectures and one XCFramework with all six platform slices
 ./scripts/apple/build.sh all
 python3 scripts/apple/verify.py --link
 ```
@@ -191,26 +191,33 @@ cleanup and Cargo. This lock is released automatically when its processes exit;
 there is no stale lock directory to remove. Separate invocations using these
 helpers can wait safely without deleting each other's shared Cargo artifacts.
 
-## Optional 32-bit iOS investigation
+## Optional iOS 10 ARMv7s and i386
 
-The shipped bundle contains ARM64 and Intel x86_64 assets. iOS 12+ runs only
-64-bit apps; Apple states that iOS 10 was the last release that ran 32-bit apps
-and [Xcode 14 removed 32-bit app builds](https://developer.apple.com/news/upcoming-requirements/?id=06062022a).
+The optional legacy bundle adds ARMv7s device and i386 simulator code to the same
+six-platform XCFramework: twelve architecture variants in total. The regular
+`build.sh all` and CI produce ten 64-bit variants without requiring an older SDK.
+iOS 11 and later run only 64-bit apps; these additional assets serve iOS 10.
+Apple [removed 32-bit app builds in Xcode 14](https://developer.apple.com/news/upcoming-requirements/?id=06062022a).
 
-The installed Rust compiler still recognizes `armv7s-apple-ios` and
-`i386-apple-ios` as tier-3 targets with deployment minimum 10.0, without a
-prebuilt standard library. `armv7-apple-ios` was
-[removed in Rust 1.74](https://blog.rust-lang.org/2023/09/25/Increasing-Apple-Version-Requirements/).
-This quiche revision requires Rust 1.88+, so using an old Rust release is not a
-solution for that removed target.
+The legacy build uses the user's separately extracted Xcode 10.3/iOS 12.4 SDK,
+current clang/linker and nightly `-Zbuild-std` for Rust's tier 3
+`armv7s-apple-ios` and `i386-apple-ios` targets. `xcode-select` stays unchanged.
+`armv7-apple-ios` was [removed in Rust 1.74](https://blog.rust-lang.org/2023/09/25/Increasing-Apple-Version-Requirements/);
+this quiche requires Rust 1.88+, so that older generic target is not used.
 
-No older Xcode/iOS SDK was found under `/Users/lamerma/Projects` during this
-build. The selected iOS 26.2 SDK's `libSystem.tbd` contains only ARM64/ARM64e;
-even an empty ARMv7s C program cannot link against it. A separate 32-bit build
-would first need an older Apple SDK with ARMv7s/i386 system stubs, rebuilt Rust
-std, BoringSSL target dispatch and measured Darwin32 ABI layouts. It also needs
-an iOS 10 device or matching older simulator environment for runtime testing.
-The 64-bit `all` build does not claim or fabricate these unavailable assets.
+See [the isolated Apple32 helpers](../apple32/README.md) for build, ABI audit and
+packaging commands. The patch disables retired bitcode bundling and explicitly
+uses the extracted Xcode's libc++ headers. It changes only local build dispatch,
+never the registry cache or crypto source. Each 32-bit archive passed CPU/platform/
+minimum 10.0 inspection, 173 exports and a full C force-load link. Rust's actual
+private FFI structures also match Darwin32: Stats 172, PathStats 396 and SendInfo 272,
+alignment 4 and measured field offsets. These are compile/link and ABI results;
+execution on an iOS 10 device or simulator still requires that actual environment.
+
+The legacy XCFramework identifiers are `ios-arm64_armv7s` and
+`ios-arm64_i386_x86_64-simulator`. The .NET 7/8 package targets select them when
+present and retain a fallback to the 64-bit identifiers. An `ios-arm` app must
+explicitly choose `TargetArchitectures=ARMv7s`; this is not a generic ARMv7 image.
 
 ## Build provenance
 
