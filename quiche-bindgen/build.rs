@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // using bindgen, generate binding code
     bindgen::Builder::default()
         .header("include/quiche.h")
+        .allowlist_function("quiche_.*")
         .generate()?
         .write_to_file("src/quiche.rs")?;
 
