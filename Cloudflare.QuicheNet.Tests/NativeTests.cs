@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Cloudflare.Quiche;
@@ -16,7 +18,24 @@ internal static class NativeTests
             Harness.True(!string.IsNullOrEmpty(QuicheLibrary.VersionCode), "native version");
             using var h3 = new QuicheH3Config { MaxFieldSectionSize = 65536 };
         });
-        Harness.Test("QUIC loopback: streams, FIN, datagrams and cancellation", RoundTripAsync);
+        Harness.Test("native ABI: every managed import has a matching export", () =>
+        {
+            var native = UbicacionDelNativo.Actual ?? throw new PlatformNotSupportedException();
+            nint handle = NativeLibrary.Load(Path.Combine(NativeMethods.LibraryDirPath!, native.Libreria));
+            try
+            {
+                foreach (var method in typeof(NativeMethods).GetMethods(BindingFlags.Static | BindingFlags.NonPublic))
+                {
+                    if (method.GetCustomAttribute<DllImportAttribute>() is { EntryPoint: { } symbol })
+                        Harness.True(NativeLibrary.TryGetExport(handle, symbol, out _), $"missing export {symbol}");
+                }
+            }
+            finally { NativeLibrary.Free(handle); }
+        });
+        Harness.Test("QUIC loopback with BBRv2: TLS, streams, FIN, datagrams and cancellation",
+            () => RoundTripAsync(QuicheCcAlgorithm.QUICHE_CC_BBR2_GCONGESTION));
+        Harness.Test("QUIC loopback with Brutal: TLS, streams, FIN, datagrams and cancellation",
+            () => RoundTripAsync(QuicheCcAlgorithm.QUICHE_CC_BRUTAL));
     }
 
     private static QuicheConfig Config() => new()
@@ -33,7 +52,7 @@ internal static class NativeTests
         DatagramOptions = new() { Enabled = true, ReceiveQueueLength = 128, SendQueueLength = 128 }
     };
 
-    private static async Task RoundTripAsync()
+    private static async Task RoundTripAsync(QuicheCcAlgorithm algorithm)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var ct = deadline.Token;
@@ -53,6 +72,9 @@ internal static class NativeTests
         {
             using var serverConfig = Config();
             using var clientConfig = Config();
+            clientConfig.CcAlgorithm = algorithm;
+            clientConfig.IsPacingEnabled = true;
+            Harness.True(clientConfig.FijarRttInicial(50), "native initial RTT setter");
             serverConfig.LoadCertificateChainFromPemFile(Path.Combine(temp, "cert.pem"));
             serverConfig.LoadPrivateKeyFromPemFile(Path.Combine(temp, "key.pem"));
             using var serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -69,6 +91,14 @@ internal static class NativeTests
                     hostname: "localhost", cancellationToken: ct);
                 using var server = await accept;
                 Harness.True(client.IsEstablished && server.IsEstablished, "handshake completed");
+                if (algorithm == QuicheCcAlgorithm.QUICHE_CC_BRUTAL)
+                {
+                    Harness.Equal(5, (int)algorithm, "Brutal ABI discriminant");
+                    client.SetBrutalRate(8_000_000);
+                }
+                Harness.True(client.MuestraDelCamino(out var path), "native path stats");
+                Harness.True(path.Enviados > 0 && path.Recibidos > 0 && path.Pmtu >= 1200,
+                    "native path stats contain the active path");
                 byte[] label = System.Text.Encoding.ASCII.GetBytes("quichenet regression");
                 byte[] clientKey = client.ExportKeyingMaterial(label, ReadOnlySpan<byte>.Empty, 32);
                 byte[] serverKey = server.ExportKeyingMaterial(label, ReadOnlySpan<byte>.Empty, 32);
@@ -98,6 +128,13 @@ internal static class NativeTests
                     await server.SendDatagramAsync(read, ct);
                     var echoed = await client.ReceiveDatagramAsync(ct);
                     Harness.True(datagram.AsSpan().SequenceEqual(echoed), "server datagram");
+                }
+                if (algorithm == QuicheCcAlgorithm.QUICHE_CC_BRUTAL)
+                {
+                    client.SetBrutalRate(0);
+                    await client.SendDatagramAsync(datagram, ct);
+                    var read = await server.ReceiveDatagramAsync(ct);
+                    Harness.True(datagram.AsSpan().SequenceEqual(read), "traffic after falling back to BBRv2");
                 }
                 using var cancel = new CancellationTokenSource(50);
                 try { await client.ReceiveDatagramAsync(cancel.Token); throw new Exception("read did not cancel"); }
