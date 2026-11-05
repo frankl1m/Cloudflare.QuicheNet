@@ -27,8 +27,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - uses: dtolnay/rust-toolchain@stable
-      - run: ./scripts/apple/build.sh all
-      - run: python3 scripts/apple/verify.py --link
+      - run: ./scripts/macos/build.sh universal
       - run: dotnet build Cloudflare.QuicheNet.Tests -p:TargetFrameworks=net10.0 -p:BuildNativeAssets=false
       - name: QUIC regressions on the runner architecture
         run: |
@@ -36,3 +35,10 @@ jobs:
           if [ "$arch" = x86_64 ]; then arch=x64; fi
           QUICHE_NATIVE_DIR="$PWD/Cloudflare.QuicheNet.NativeAssets.macOS/runtimes/osx-$arch/native" \
             dotnet Cloudflare.QuicheNet.Tests/bin/Debug/net10.0/Cloudflare.QuicheNet.Tests.dll --native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quiche-macos-universal
+          path: Cloudflare.QuicheNet.NativeAssets.macOS/runtimes/osx-universal/native/libquiche_bindgen.dylib
+          if-no-files-found: error
+      - run: ./scripts/apple/build.sh all
+      - run: python3 scripts/apple/verify.py --link
