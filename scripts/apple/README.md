@@ -228,8 +228,7 @@ patched BoringSSL build-script hashes, Rust/std versions and hashes, Xcode and
 SDK versions. It never invokes Cargo or rewrites the lock. Keep that snapshot
 beside copied binaries and their file hashes.
 
-The wrapper's local `Cargo.lock` is ignored; fresh dependency resolution is
-therefore subject to semver. The Apple preparer explicitly requires
-`boring-sys 4.22.0` and fails safely on another version until its dispatch patch is
-reviewed. The snapshot records what produced these binaries; it does not promise
-that a later unlocked build resolves the same dependencies or is byte-identical.
+The tracked `quiche-bindgen/Cargo.lock` pins the dependencies used for the
+native builds. The Apple preparer requires `boring-sys 4.22.0` until its
+dispatch patch is updated for a newer version. The build snapshot also records
+the toolchain and SDK, which can affect the resulting binaries.
