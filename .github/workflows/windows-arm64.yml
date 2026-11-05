@@ -1,0 +1,46 @@
+name: Windows ARM64 native build
+on:
+  push:
+    branches: [codex/build-quiche-win-arm64]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: 'C:\qtarget'
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      CARGO_PROFILE_RELEASE_STRIP: debuginfo
+      LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build Windows ARM64
+        run: |
+          if (!(Test-Path "$env:LIBCLANG_PATH\libclang.dll")) {
+            $clang = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter libclang.dll |
+                Where-Object { $_.FullName -match '(?i)arm64' } | Select-Object -First 1
+            if (!$clang) { throw 'ARM64 libclang not found' }
+            $env:LIBCLANG_PATH = $clang.DirectoryName
+          }
+          cargo build --locked --manifest-path quiche-bindgen/Cargo.toml --release --target aarch64-pc-windows-msvc
+      - name: Exercise the ABI from .NET ARM64
+        run: |
+          $dotnetInfo = dotnet --info | Out-String
+          if ($dotnetInfo -notmatch '(?im)^\s*RID:\s+win-arm64\s*$') { throw $dotnetInfo }
+          $env:QUICHE_NATIVE_DIR = "$env:CARGO_TARGET_DIR\aarch64-pc-windows-msvc\release"
+          dotnet run --project Cloudflare.QuicheNet.Tests -p:TargetFrameworks=net10.0 -p:BuildNativeAssets=false -- --native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quiche-bindgen-win-arm64
+          path: C:/qtarget/aarch64-pc-windows-msvc/release/quiche_bindgen.dll
+          if-no-files-found: error
