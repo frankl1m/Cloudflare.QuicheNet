@@ -32,6 +32,10 @@ jobs:
             if (!$clang) { throw 'ARM64 libclang not found' }
             $env:LIBCLANG_PATH = $clang.DirectoryName
           }
+          # BoringSSL 4.22 does not build its ARM64 assembly with MSVC.
+          $toolchain = Join-Path $env:RUNNER_TEMP 'boringssl-win-arm64.cmake'
+          'set(OPENSSL_NO_ASM ON CACHE BOOL "" FORCE)' | Set-Content $toolchain
+          $env:CMAKE_TOOLCHAIN_FILE = $toolchain.Replace('\', '/')
           cargo build --locked --manifest-path quiche-bindgen/Cargo.toml --release --target aarch64-pc-windows-msvc
       - name: Exercise the ABI from .NET ARM64
         run: |
